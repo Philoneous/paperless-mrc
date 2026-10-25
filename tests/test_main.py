@@ -87,6 +87,36 @@ def test_parallel_behaelt_seitenreihenfolge(tmp_path, rng):
         assert [f"Nummer {n}" in page.get_text() for n, page in enumerate(doc, 1)] == [True] * 3
 
 
+def test_gemischte_pdf_digitale_seite_bleibt(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "gemischt.pdf", [letter_page(rng), blank_back(rng), letter_page(rng)])
+    with pymupdf.open(path) as doc:
+        page = doc.new_page(width=595, height=842)  # angehängte digitale Seite
+        page.insert_text((72, 72), "Digitaler Anhang Kontonummer", fontsize=12)
+        doc.set_toc([[1, "Anschreiben", 1], [1, "Anhang", 4]])
+        doc.set_metadata({"title": "Testtitel"})
+        doc.saveIncr()
+    size_before = path.stat().st_size
+    mrc.process(path, SETTINGS)
+    assert path.stat().st_size < size_before / 3
+    with pymupdf.open(path) as doc:
+        assert doc.page_count == 3  # leere Scan-Seite entfernt
+        assert "Jahresabrechnung" in doc[0].get_text()
+        assert doc[2].get_text().strip() == "Digitaler Anhang Kontonummer"
+        assert doc[2].get_images() == []  # nicht gerastert
+        assert [t[1:] for t in doc.get_toc()] == [["Anschreiben", 1], ["Anhang", 3]]
+        assert doc.metadata["title"] == "Testtitel"
+
+
+def test_signierte_pdf_bleibt_unveraendert(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "signiert.pdf", [letter_page(rng)])
+    with pikepdf.open(path, allow_overwriting_input=True) as pdf:
+        pdf.Root.AcroForm = pikepdf.Dictionary(Fields=pikepdf.Array(), SigFlags=3)
+        pdf.save(path)
+    before = path.read_bytes()
+    mrc.process(path, SETTINGS)
+    assert path.read_bytes() == before
+
+
 def test_schraeglage_wird_erkannt(rng):
     img = letter_page(rng).rotate(1.5, resample=Image.BICUBIC, fillcolor=(248, 246, 240))
     assert abs(mrc.skew_angle(img) - (-1.5)) <= 0.2

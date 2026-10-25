@@ -5,11 +5,13 @@ Komprimiert gescannte PDFs per Mixed Raster Content (MRC, archive-pdf-tools) und
 ersetzt damit die Arbeitskopie. Paperless speichert so nur noch eine, kleine Datei.
 
 Ablauf je Dokument:
-  1. Nur reine Scan-PDFs (jede Seite = ein Seitenbild, kein sichtbarer Text).
-  2. Wirklich leere Seiten entfernen.
+  1. Gescannte Seiten erkennen (Seite = ein Seitenbild, kein sichtbarer Text); andere Seiten
+     (z. B. angehängte digitale Seiten) bleiben unverändert, signierte PDFs ganz.
+  2. Wirklich leere gescannte Seiten entfernen.
   3. Jede Seite in nativer Auflösung rendern (inkl. darübergelegter Grafiken).
   4. Textebene: vorhandene übernehmen, sonst Tesseract (mit Drehung/Begradigung).
-  5. MRC-Kodierung je Seite, zusammenführen, Übergrößen auf A4, SMask-Farbraum korrigieren.
+  5. MRC-Kodierung je Scan-Seite, an ihrer Stelle in die Originaldatei einsetzen (Lesezeichen und
+     Metadaten bleiben), Übergrößen auf A4, SMask-Farbraum korrigieren.
   6. Ergebnis prüfen; nur wenn alles stimmt und es kleiner ist, Arbeitskopie ersetzen.
 
 Bei jedem Fehler bleibt die Arbeitskopie unverändert und das Skript endet mit 0,
@@ -18,6 +20,7 @@ damit Paperless das Dokument normal verarbeitet.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -210,57 +213,74 @@ def fit_a4(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:
     return True
 
 
-def fix_smask_colorspace(pdf: pikepdf.Pdf) -> None:
+def fix_smask_colorspace(page: pikepdf.Page) -> None:
     """recode_pdf legt die Maske im ICC-Farbraum an; die PDF-Norm verlangt DeviceGray
     (sonst zeigt z. B. Poppler nur den Hintergrund)."""
-    for page in pdf.pages:
-        for image in page.get_images().values():
-            smask = image.get("/SMask")
-            if smask is not None and smask.get("/ColorSpace") != pikepdf.Name.DeviceGray:
-                smask.ColorSpace = pikepdf.Name.DeviceGray
+    for image in page.get_images().values():
+        smask = image.get("/SMask")
+        if smask is not None and smask.get("/ColorSpace") != pikepdf.Name.DeviceGray:
+            smask.ColorSpace = pikepdf.Name.DeviceGray
 
 
-def build(src: Path, keep: list[int], settings: Settings, work: Path) -> tuple[Path, list[bool]]:
-    page_dirs = []
-    with pikepdf.open(src) as source:
-        for n, index in enumerate(keep):
-            page_dir = work / f"p{n:04d}"
+def replace_page_content(pdf: pikepdf.Pdf, page: pikepdf.Page, new: pikepdf.Page) -> None:
+    """Ersetzt Inhalt und Größe einer Seite, behält aber das Seitenobjekt selbst – damit bleiben
+    Lesezeichen und Verweise auf die Seite gültig."""
+    obj, copied = page.obj, pdf.copy_foreign(new.obj)  # nicht eingebundene Reste entfallen beim Speichern
+    obj.Contents = copied.Contents
+    obj.Resources = copied.Resources
+    obj.MediaBox = pikepdf.Array([float(v) for v in new.mediabox])
+    # Drehung und Anmerkungen sind im neuen Seitenbild bereits enthalten
+    for key in ("/CropBox", "/TrimBox", "/BleedBox", "/ArtBox", "/Rotate", "/UserUnit", "/Annots", "/Thumb"):
+        if key in obj:
+            del obj[key]
+
+
+def build(src: Path, encode: list[int], blank: list[int], settings: Settings,
+          work: Path) -> tuple[Path, list[bool]]:
+    """Kodiert die Scan-Seiten neu und setzt sie an ihrer Stelle in die Originaldatei ein.
+    Alle anderen Seiten, Lesezeichen und Metadaten bleiben, wie sie sind; leere Seiten entfallen."""
+    with pikepdf.open(src) as pdf, contextlib.ExitStack() as parts:
+        page_dirs = []
+        for index in encode:
+            page_dir = work / f"p{index:04d}"
             page_dir.mkdir()
             single = pikepdf.new()
-            single.pages.append(source.pages[index])
+            single.pages.append(pdf.pages[index])
             single.save(page_dir / "in.pdf")
             page_dirs.append(page_dir)
 
-    args = [(d / "in.pdf", d, settings, f"Seite {index + 1}") for d, index in zip(page_dirs, keep)]
-    encoded = pmap(encode_page, args, settings.jobs)
+        args = [(d / "in.pdf", d, settings, f"Seite {index + 1}") for d, index in zip(page_dirs, encode)]
+        encoded = pmap(encode_page, args, settings.jobs)
 
-    result = pikepdf.new()
-    text_kept = []
-    for path, had_text in encoded:
-        text_kept.append(had_text)
-        with pikepdf.open(path) as part:
-            result.pages.extend(part.pages)
-    resized = sum(fit_a4(result, page) for page in result.pages)
-    if resized:
-        log(f"{resized} Seite(n) mit falscher Seitengröße auf A4 skaliert")
-    fix_smask_colorspace(result)
-    out = work / "result.pdf"
-    result.save(out, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.generate)
-    return out, text_kept
+        resized = 0
+        for index, (path, _) in zip(encode, encoded):
+            part = parts.enter_context(pikepdf.open(path))  # bis zum Speichern offen halten
+            page = pdf.pages[index]
+            replace_page_content(pdf, page, part.pages[0])
+            resized += fit_a4(pdf, page)
+            fix_smask_colorspace(page)
+        if resized:
+            log(f"{resized} Seite(n) mit falscher Seitengröße auf A4 skaliert")
+        for index in sorted(blank, reverse=True):
+            del pdf.pages[index]
+        out = work / "result.pdf"
+        pdf.save(out, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.generate)
+    return out, [had_text for _, had_text in encoded]
 
 
-def verify(src: Path, keep: list[int], out: Path, text_kept: list[bool], work: Path) -> None:
-    """Wirft eine Ausnahme, wenn das Ergebnis nicht verwendet werden darf."""
+def verify(src: Path, keep: list[int], out: Path, text_checked: set[int], work: Path) -> None:
+    """Wirft eine Ausnahme, wenn das Ergebnis nicht verwendet werden darf.
+    text_checked: Seiten (alte Nummern), deren Text erhalten bleiben muss."""
     with pymupdf.open(src) as before, pymupdf.open(out) as after:
         if after.page_count != len(keep):
             raise RuntimeError(f"Seitenzahl {after.page_count} statt {len(keep)}")
         for n, index in enumerate(keep):
-            if not text_kept[n]:
+            if index not in text_checked:
                 continue
             words_before = len(before[index].get_text("words"))
             words_after = len(after[n].get_text("words"))
             if words_after < 0.95 * words_before:
-                raise RuntimeError(f"Seite {index + 1}: Textebene unvollständig ({words_after}/{words_before} Wörter)")
+                raise RuntimeError(f"Seite {index + 1}: Text unvollständig ({words_after}/{words_before} Wörter)")
     check = run("pdftoppm", "-r", "10", "-png", out, work / "check")
     if "error" in check.stderr.lower():
         raise RuntimeError(f"Darstellungsprüfung mit Poppler fehlgeschlagen: {check.stderr.strip()}")
@@ -271,20 +291,28 @@ def process(path: Path, settings: Settings) -> None:
         log(f"{path.name}: keine PDF – unverändert")
         return
     with pymupdf.open(path) as doc:
-        if not all(is_scan_page(page) for page in doc):
-            log(f"{path.name}: keine reine Scan-PDF – unverändert")
+        if doc.get_sigflags() > 0:
+            log(f"{path.name}: digital signiert – unverändert, damit die Signatur gültig bleibt")
             return
+        scans = [i for i, page in enumerate(doc) if is_scan_page(page)]
         pages = doc.page_count
-    inks = pmap(page_ink_percent, [(path, i) for i in range(pages)], settings.jobs)
-    keep = [i for i, ink in enumerate(inks) if ink >= BLANK_INK_PERCENT]
-    if not keep:
-        log(f"{path.name}: alle Seiten leer – unverändert")
+    if not scans:
+        log(f"{path.name}: keine gescannten Seiten – unverändert")
         return
+    inks = pmap(page_ink_percent, [(path, i) for i in scans], settings.jobs)
+    blank = [i for i, ink in zip(scans, inks) if ink < BLANK_INK_PERCENT]
+    encode = [i for i in scans if i not in blank]
+    if not encode:
+        log(f"{path.name}: alle gescannten Seiten leer – unverändert")
+        return
+    keep = [i for i in range(pages) if i not in blank]
+    digital = pages - len(scans)
 
     with tempfile.TemporaryDirectory(prefix="paperless-mrc-") as tmp:
         work = Path(tmp)
-        out, text_kept = build(path, keep, settings, work)
-        verify(path, keep, out, text_kept, work)
+        out, text_kept = build(path, encode, blank, settings, work)
+        must_keep_text = {i for i, had in zip(encode, text_kept) if had} | (set(keep) - set(scans))
+        verify(path, keep, out, must_keep_text, work)
         size_before, size_after = path.stat().st_size, out.stat().st_size
         if size_after >= size_before:
             log(f"{path.name}: Ergebnis nicht kleiner ({size_after // 1024} KB) – unverändert")
@@ -293,10 +321,10 @@ def process(path: Path, settings: Settings) -> None:
         shutil.copyfile(out, staged)
         os.replace(staged, path)
 
-    removed = pages - len(keep)
     source = "übernommen" if all(text_kept) else "per Tesseract" if not any(text_kept) else "gemischt"
     log(f"{path.name}: {size_before // 1024} KB -> {size_after // 1024} KB, {len(keep)} Seite(n)"
-        f"{f', {removed} leere entfernt' if removed else ''}, Textebene {source}")
+        f"{f', {len(blank)} leere entfernt' if blank else ''}"
+        f"{f', {digital} digitale unverändert' if digital else ''}, Textebene {source}")
 
 
 def main() -> int:

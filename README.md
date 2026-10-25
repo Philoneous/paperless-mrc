@@ -24,16 +24,18 @@ Die Maske war dabei CCITT-komprimiert; mit jbig2enc werden die Dateien noch etwa
 
 ## Was das Skript tut
 
-1. **Nur reine Scans:** Jede Seite muss aus genau einem Seitenbild bestehen, ohne sichtbaren Text.
-   Digital erzeugte oder gemischte PDFs sowie direkt hochgeladene Bilder (JPEG, PNG …) bleiben unverändert.
-2. **Leere Seiten entfernen:** nur wirklich leere Seiten. Papierton, Rauschen und durchscheinende Rückseiten zählen nicht
+1. **Nur gescannte Seiten:** Eine Seite gilt als Scan, wenn sie aus genau einem Seitenbild besteht, ohne sichtbaren Text.
+   Nur diese Seiten werden neu kodiert. Andere Seiten (z. B. ein angehängtes digitales Anschreiben), Lesezeichen und
+   Metadaten bleiben unverändert. Rein digitale PDFs, digital signierte PDFs und direkt hochgeladene Bilder
+   (JPEG, PNG …) bleiben ganz unverändert.
+2. **Leere Seiten entfernen:** nur wirklich leere gescannte Seiten. Papierton, Rauschen und durchscheinende Rückseiten zählen nicht
    als Inhalt; eine Seite mit nur einer Seitenzahl bleibt erhalten.
 3. **Seiten rendern** in nativer Auflösung, einschließlich darübergelegter Grafiken (z. B. Markierungen).
 4. **Textebene:** Eine vorhandene Textebene (z. B. von der iOS-Scanfunktion) wird übernommen. Sonst erkennt Tesseract den Text,
    vorher werden Seiten bei Bedarf gedreht und begradigt.
 5. **MRC-Kodierung** je Seite (Hintergrund halbe Auflösung, JPEG2000), offensichtlich falsche Seitengrößen
    (z. B. 61 × 86 cm bei Handyscans) werden auf A4 korrigiert.
-6. **Prüfung:** Seitenzahl, Vollständigkeit der übernommenen Textebene, fehlerfreie Darstellung mit Poppler, kleinere Datei.
+6. **Prüfung:** Seitenzahl, Vollständigkeit der übernommenen Textebene und des Texts digitaler Seiten, fehlerfreie Darstellung mit Poppler, kleinere Datei.
    Nur dann wird die Arbeitskopie ersetzt.
 
 Bei **jedem Fehler** bleibt die Datei unverändert und Paperless verarbeitet sie wie bisher.
@@ -112,6 +114,8 @@ Installer die Sprachen zusätzlich in `paperless.conf` ein.
 - **Duplikaterkennung:** Paperless vergleicht die eingehende Datei mit der gespeicherten. Da gespeichert wird, was das Skript
   erzeugt, erkennt Paperless ein erneut hochgeladenes, byte-identisches Original nicht mehr als Duplikat.
 - **„Erneut verarbeiten“** in Paperless führt das Skript nicht noch einmal aus (die Datei ist ja bereits komprimiert).
+- Anmerkungen (Kommentare, Markierungen) auf gescannten Seiten werden ins Seitenbild übernommen und sind danach
+  nicht mehr bearbeitbar.
 - Seiten mit vorhandener Textebene werden nicht gedreht oder begradigt, weil die Textebene sonst nicht mehr zum Bild passt.
 
 ## Entwicklung
