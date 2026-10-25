@@ -68,6 +68,29 @@ beiden Dienste neu starten.
 
 Die Ausgaben stehen im Paperless-Log mit dem Präfix `paperless-mrc:`.
 
+## Mac: Finder-Schnellaktion
+
+Dieselbe Verarbeitung gibt es als Rechtsklick-Eintrag im Finder (*Schnellaktionen → PDF komprimieren (MRC)*).
+Sie legt je ausgewählter PDF `<Name> (komprimiert).pdf` daneben an; das Original bleibt unverändert. Ist keine
+Verkleinerung möglich (keine reine Scan-PDF, Ergebnis nicht kleiner, Fehler), entsteht keine Datei. Das Ergebnis
+erscheint als Mitteilung.
+
+Installation als normaler Benutzer, [Homebrew](https://brew.sh) vorausgesetzt:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Philoneous/paperless-mrc/main/macos/install.sh)"
+```
+
+Der Installer installiert per Homebrew Tesseract mit allen Sprachpaketen (`tesseract-lang`, großer Download),
+OpenJPEG, Poppler, jbig2enc und uv, legt paperless-mrc mit `uv tool install` an und schreibt die Schnellaktion nach
+`~/Library/Services`. **Update:** denselben Befehl erneut ausführen. **Entfernen:**
+`uv tool uninstall paperless-mrc`, `~/.local/bin/pdf-mrc` und `~/Library/Services/PDF komprimieren (MRC).workflow` löschen.
+
+Tesseract-Sprachen: `deu+eng+pol`, änderbar in `~/.local/bin/pdf-mrc` (`PAPERLESS_OCR_LANGUAGE`). Erscheint der
+Eintrag nicht, unter *Systemeinstellungen → Tastatur → Tastaturkurzbefehle → Dienste* prüfen, ob er aktiviert ist.
+Für Apple-Silicon-Macs gibt es fertige Pakete aller Python-Abhängigkeiten; auf Intel-Macs muss archive-pdf-tools
+aus dem Quellcode gebaut werden (Xcode Command Line Tools).
+
 ## Konfiguration
 
 Das Skript übernimmt diese Paperless-Einstellungen aus `paperless.conf` (mit denselben Standardwerten):
