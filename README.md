@@ -101,6 +101,7 @@ Das Skript übernimmt diese Paperless-Einstellungen aus `paperless.conf` (mit de
 | `PAPERLESS_OCR_DESKEW` | Schräglage korrigieren (nur Seiten ohne vorhandene Textebene) |
 | `PAPERLESS_OCR_ROTATE_PAGES` | Seiten drehen (nur Seiten ohne vorhandene Textebene) |
 | `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD` | Mindestsicherheit der Drehungserkennung |
+| `PAPERLESS_THREADS_PER_WORKER` | Seiten, die gleichzeitig verarbeitet werden (Standard wie Paperless: Kerne ÷ `PAPERLESS_TASK_WORKERS`) |
 
 Werte, die nur in der Weboberfläche unter *Konfiguration* gesetzt sind, sieht das Skript nicht – deshalb trägt der
 Installer die Sprachen zusätzlich in `paperless.conf` ein.

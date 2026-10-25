@@ -23,7 +23,9 @@ import os
 import shutil
 import subprocess
 import sys
+import multiprocessing
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,14 +60,18 @@ class Settings:
     deskew: bool
     rotate: bool
     rotate_threshold: float
+    jobs: int = 1  # Seiten parallel; wie Paperless' OCRmyPDF-Aufruf (THREADS_PER_WORKER)
 
     @classmethod
     def from_env(cls) -> Settings:
+        workers = int(os.environ.get("PAPERLESS_TASK_WORKERS", "1"))
+        default_jobs = max((os.cpu_count() or 1) // max(workers, 1), 1)
         return cls(
             language=os.environ.get("PAPERLESS_OCR_LANGUAGE", "eng"),
             deskew=_env_bool("PAPERLESS_OCR_DESKEW", True),
             rotate=_env_bool("PAPERLESS_OCR_ROTATE_PAGES", True),
             rotate_threshold=float(os.environ.get("PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD", "12.0")),
+            jobs=max(int(os.environ.get("PAPERLESS_THREADS_PER_WORKER", default_jobs)), 1),
         )
 
 
@@ -99,6 +105,21 @@ def ink_percent(page: pymupdf.Page) -> float:
     return float(ink[m_y:-m_y, m_x:-m_x].mean() * 100)
 
 
+def page_ink_percent(path: Path, index: int) -> float:
+    with pymupdf.open(path) as doc:
+        return ink_percent(doc[index])
+
+
+def pmap(fn, args: list[tuple], jobs: int) -> list:
+    """fn(*a) für alle a, bei jobs > 1 in getrennten Prozessen; Reihenfolge bleibt erhalten."""
+    if jobs <= 1 or len(args) <= 1:
+        return [fn(*a) for a in args]
+    os.environ.setdefault("OMP_THREAD_LIMIT", "1")  # Tesseract nicht zusätzlich mehrfädig
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=min(jobs, len(args)), mp_context=ctx) as pool:
+        return list(pool.map(fn, *zip(*args)))
+
+
 # ----------------------------------------------------------------------------- OCR-Hilfen
 
 
@@ -130,7 +151,7 @@ def skew_angle(image: Image.Image) -> float:
 # ----------------------------------------------------------------------------- Verarbeitung
 
 
-def encode_page(page_pdf: Path, work: Path, settings: Settings) -> tuple[Path, bool]:
+def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Seite") -> tuple[Path, bool]:
     """Kodiert eine einseitige Scan-PDF per MRC. Rückgabe: Ergebnis, Textebene übernommen?"""
     meta_file = work / "meta.json"
     meta_file.write_text(run("pdf-metadata-json", page_pdf).stdout)
@@ -145,18 +166,21 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings) -> tuple[Path, b
     image_path = work / "page.png"
     dpi = 72 * scale
 
+    def save(img: Image.Image) -> None:
+        img.save(image_path, dpi=(dpi, dpi), compress_level=1)  # Zwischendatei: schnell statt klein
+
     if has_text:
         hocr = run("pdf-to-hocr", "-f", page_pdf, "-J", meta_file).stdout
-        image.save(image_path, dpi=(dpi, dpi))
+        save(image)
     else:
-        image.save(image_path, dpi=(dpi, dpi))
+        save(image)
         if settings.rotate and (rotate := orientation(image_path, settings.rotate_threshold)):
             image = image.rotate(-rotate, expand=True)
-            log(f"Seite um {rotate}° gedreht")
+            log(f"{label}: um {rotate}° gedreht")
         if settings.deskew and abs(angle := skew_angle(image)) >= MIN_SKEW_DEG:
             image = image.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
-            log(f"Schräglage {angle:+.1f}° korrigiert")
-        image.save(image_path, dpi=(dpi, dpi))
+            log(f"{label}: Schräglage {angle:+.1f}° korrigiert")
+        save(image)
         hocr = run("tesseract", image_path, "-", "-l", settings.language, "hocr").stdout
 
     hocr_path = work / "page.hocr"
@@ -197,8 +221,7 @@ def fix_smask_colorspace(pdf: pikepdf.Pdf) -> None:
 
 
 def build(src: Path, keep: list[int], settings: Settings, work: Path) -> tuple[Path, list[bool]]:
-    result = pikepdf.new()
-    text_kept = []
+    page_dirs = []
     with pikepdf.open(src) as source:
         for n, index in enumerate(keep):
             page_dir = work / f"p{n:04d}"
@@ -206,10 +229,17 @@ def build(src: Path, keep: list[int], settings: Settings, work: Path) -> tuple[P
             single = pikepdf.new()
             single.pages.append(source.pages[index])
             single.save(page_dir / "in.pdf")
-            encoded, had_text = encode_page(page_dir / "in.pdf", page_dir, settings)
-            text_kept.append(had_text)
-            with pikepdf.open(encoded) as part:
-                result.pages.extend(part.pages)
+            page_dirs.append(page_dir)
+
+    args = [(d / "in.pdf", d, settings, f"Seite {index + 1}") for d, index in zip(page_dirs, keep)]
+    encoded = pmap(encode_page, args, settings.jobs)
+
+    result = pikepdf.new()
+    text_kept = []
+    for path, had_text in encoded:
+        text_kept.append(had_text)
+        with pikepdf.open(path) as part:
+            result.pages.extend(part.pages)
     resized = sum(fit_a4(result, page) for page in result.pages)
     if resized:
         log(f"{resized} Seite(n) mit falscher Seitengröße auf A4 skaliert")
@@ -244,8 +274,9 @@ def process(path: Path, settings: Settings) -> None:
         if not all(is_scan_page(page) for page in doc):
             log(f"{path.name}: keine reine Scan-PDF – unverändert")
             return
-        keep = [i for i, page in enumerate(doc) if ink_percent(page) >= BLANK_INK_PERCENT]
         pages = doc.page_count
+    inks = pmap(page_ink_percent, [(path, i) for i in range(pages)], settings.jobs)
+    keep = [i for i, ink in enumerate(inks) if ink >= BLANK_INK_PERCENT]
     if not keep:
         log(f"{path.name}: alle Seiten leer – unverändert")
         return

@@ -79,6 +79,14 @@ def test_uebergrosse_seite_wird_auf_a4_skaliert(tmp_path, rng):
     assert rect.width <= 596 and rect.height <= 842
 
 
+def test_parallel_behaelt_seitenreihenfolge(tmp_path, rng):
+    pages = [letter_page(rng, lines=[f"Testseite Nummer {n}"]) for n in (1, 2, 3)]
+    path = write_scan_pdf(tmp_path / "parallel.pdf", pages)
+    mrc.process(path, mrc.Settings(language="deu", deskew=True, rotate=True, rotate_threshold=12.0, jobs=3))
+    with pymupdf.open(path) as doc:
+        assert [f"Nummer {n}" in page.get_text() for n, page in enumerate(doc, 1)] == [True] * 3
+
+
 def test_schraeglage_wird_erkannt(rng):
     img = letter_page(rng).rotate(1.5, resample=Image.BICUBIC, fillcolor=(248, 246, 240))
     assert abs(mrc.skew_angle(img) - (-1.5)) <= 0.2
