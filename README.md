@@ -99,3 +99,8 @@ PAPERLESS_MRC_TESTFILES=/pfad/zu/scans uv run pytest -k echte   # optional: eige
 ```
 
 Benötigt `tesseract` (mit `deu`), `opj_compress` (libopenjp2-tools) und `pdftoppm` (poppler-utils).
+
+## Lizenz
+
+GNU Affero General Public License v3.0 oder später (`AGPL-3.0-or-later`), siehe [LICENSE](LICENSE) –
+passend zu den AGPL-lizenzierten Abhängigkeiten PyMuPDF und archive-pdf-tools.

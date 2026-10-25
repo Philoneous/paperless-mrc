@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """paperless-mrc – Pre-Consume-Skript für Paperless-ngx.
 
 Komprimiert gescannte PDFs per Mixed Raster Content (MRC, archive-pdf-tools) und
