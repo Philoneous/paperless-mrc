@@ -1,0 +1,284 @@
+"""paperless-mrc – Pre-Consume-Skript für Paperless-ngx.
+
+Komprimiert gescannte PDFs per Mixed Raster Content (MRC, archive-pdf-tools) und
+ersetzt damit die Arbeitskopie. Paperless speichert so nur noch eine, kleine Datei.
+
+Ablauf je Dokument:
+  1. Nur reine Scan-PDFs (jede Seite = ein Seitenbild, kein sichtbarer Text).
+  2. Wirklich leere Seiten entfernen.
+  3. Jede Seite in nativer Auflösung rendern (inkl. darübergelegter Grafiken).
+  4. Textebene: vorhandene übernehmen, sonst Tesseract (mit Drehung/Begradigung).
+  5. MRC-Kodierung je Seite, zusammenführen, Übergrößen auf A4, SMask-Farbraum korrigieren.
+  6. Ergebnis prüfen; nur wenn alles stimmt und es kleiner ist, Arbeitskopie ersetzen.
+
+Bei jedem Fehler bleibt die Arbeitskopie unverändert und das Skript endet mit 0,
+damit Paperless das Dokument normal verarbeitet.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pikepdf
+import pymupdf
+from PIL import Image, ImageFilter
+
+A4 = (595.28, 841.89)  # pt
+A3_WIDTH = 841.89  # pt; ist die kürzere Seite größer, ist die Seitengröße offensichtlich falsch
+BLANK_INK_PERCENT = 0.005  # nur wirklich leere Seiten (eine Seitenzahl liegt bei ca. 0,05 %)
+MIN_SKEW_DEG = 0.2
+TOOLS_DIR = Path(sys.executable).parent  # recode_pdf, pdf-to-hocr, pdf-metadata-json
+
+
+def log(message: str) -> None:
+    print(f"paperless-mrc: {message}", flush=True)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("true", "1", "t", "y", "yes")
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Übernimmt die passenden OCR-Einstellungen von Paperless (gleiche Standardwerte)."""
+
+    language: str
+    deskew: bool
+    rotate: bool
+    rotate_threshold: float
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        return cls(
+            language=os.environ.get("PAPERLESS_OCR_LANGUAGE", "eng"),
+            deskew=_env_bool("PAPERLESS_OCR_DESKEW", True),
+            rotate=_env_bool("PAPERLESS_OCR_ROTATE_PAGES", True),
+            rotate_threshold=float(os.environ.get("PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD", "12.0")),
+        )
+
+
+def run(*cmd: str | Path) -> subprocess.CompletedProcess:
+    env = {**os.environ, "PATH": f"{TOOLS_DIR}{os.pathsep}{os.environ.get('PATH', '')}"}
+    return subprocess.run([str(c) for c in cmd], check=True, capture_output=True, text=True, env=env)
+
+
+# ----------------------------------------------------------------------------- Erkennung
+
+
+def is_scan_page(page: pymupdf.Page) -> bool:
+    """Genau ein Bild, das die Seite fast ganz bedeckt, und kein sichtbarer Text."""
+    images = page.get_image_info()
+    if len(images) != 1:
+        return False
+    covered = pymupdf.Rect(images[0]["bbox"]) & page.rect
+    if covered.get_area() < 0.9 * page.rect.get_area():
+        return False
+    return all(span["type"] == 3 or span.get("opacity", 1) == 0 for span in page.get_texttrace())
+
+
+def ink_percent(page: pymupdf.Page) -> float:
+    """Anteil Pixel, die deutlich dunkler sind als der lokale Papierton (Rand ignoriert)."""
+    zoom = 600 / page.rect.width
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csGRAY, alpha=False)
+    gray = Image.frombytes("L", (pix.width, pix.height), pix.samples)
+    paper = gray.filter(ImageFilter.MedianFilter(31))
+    ink = (np.asarray(paper, np.int16) - np.asarray(gray, np.int16)) > 40
+    m_y, m_x = int(0.02 * ink.shape[0]), int(0.02 * ink.shape[1])
+    return float(ink[m_y:-m_y, m_x:-m_x].mean() * 100)
+
+
+# ----------------------------------------------------------------------------- OCR-Hilfen
+
+
+def orientation(image_path: Path, threshold: float) -> int:
+    """Nötige Drehung laut Tesseract-OSD (0, 90, 180, 270); 0 bei zu geringer Sicherheit."""
+    try:
+        out = run("tesseract", image_path, "-", "--psm", "0").stdout
+    except subprocess.CalledProcessError:
+        return 0  # z. B. zu wenig Text für eine Erkennung
+    values = dict(line.split(":", 1) for line in out.splitlines() if ":" in line)
+    rotate = int(values.get("Rotate", "0").strip())
+    confidence = float(values.get("Orientation confidence", "0").strip())
+    return rotate if confidence >= threshold else 0
+
+
+def skew_angle(image: Image.Image) -> float:
+    """Schräglage per Projektionsprofil: Winkel mit der größten Varianz der Zeilensummen."""
+    small = image.convert("L").resize((800, round(800 * image.height / image.width)))
+    a = np.asarray(small, np.float32)
+    binary = Image.fromarray(((a < a.mean() - a.std()) * 255).astype(np.uint8))
+
+    def score(angle: float) -> float:
+        return float(np.asarray(binary.rotate(angle), np.float32).sum(axis=1).var())
+
+    coarse = max(np.arange(-5, 5.01, 0.5), key=score)
+    return round(float(max(np.arange(coarse - 0.5, coarse + 0.51, 0.1), key=score)), 1)
+
+
+# ----------------------------------------------------------------------------- Verarbeitung
+
+
+def encode_page(page_pdf: Path, work: Path, settings: Settings) -> tuple[Path, bool]:
+    """Kodiert eine einseitige Scan-PDF per MRC. Rückgabe: Ergebnis, Textebene übernommen?"""
+    meta_file = work / "meta.json"
+    meta_file.write_text(run("pdf-metadata-json", page_pdf).stdout)
+    meta = json.loads(meta_file.read_text())["page_data"][0]
+    scale = meta["estimated_scale"]
+
+    with pymupdf.open(page_pdf) as doc:
+        pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(scale, scale), colorspace=pymupdf.csRGB, alpha=False)
+        # meta["has_text_layer"] ist bei jeder Seite mit Bild True, daher selbst prüfen
+        has_text = bool(doc[0].get_text("words"))
+    image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    image_path = work / "page.png"
+    dpi = 72 * scale
+
+    if has_text:
+        hocr = run("pdf-to-hocr", "-f", page_pdf, "-J", meta_file).stdout
+        image.save(image_path, dpi=(dpi, dpi))
+    else:
+        image.save(image_path, dpi=(dpi, dpi))
+        if settings.rotate and (rotate := orientation(image_path, settings.rotate_threshold)):
+            image = image.rotate(-rotate, expand=True)
+            log(f"Seite um {rotate}° gedreht")
+        if settings.deskew and abs(angle := skew_angle(image)) >= MIN_SKEW_DEG:
+            image = image.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
+            log(f"Schräglage {angle:+.1f}° korrigiert")
+        image.save(image_path, dpi=(dpi, dpi))
+        hocr = run("tesseract", image_path, "-", "-l", settings.language, "hocr").stdout
+
+    hocr_path = work / "page.hocr"
+    hocr_path.write_text(hocr)
+    out = work / "page_mrc.pdf"
+    mask = "jbig2" if shutil.which("jbig2") else "ccitt"
+    run("recode_pdf", "-I", image_path, "-T", hocr_path, "-o", out, "--dpi", str(round(dpi)),
+        "-J", "openjpeg", "--mrc-image-format", "jpeg2000", "--mask-compression", mask,
+        "--bg-downsample", "2", "--bg-compression-flags=-r 200")
+    return out, has_text
+
+
+def fit_a4(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:
+    """Skaliert offensichtlich zu große Seiten (z. B. 72-ppi-Handyscans) auf A4."""
+    x0, y0, x1, y1 = (float(v) for v in page.mediabox)
+    w, h = x1 - x0, y1 - y0
+    if min(w, h) <= A3_WIDTH:
+        return False
+    box_w, box_h = (A4[1], A4[0]) if w > h else A4
+    f = min(box_w / w, box_h / h)
+    page.contents_add(pikepdf.Stream(pdf, f"q {f:.6f} 0 0 {f:.6f} {-x0 * f:.4f} {-y0 * f:.4f} cm\n".encode()),
+                      prepend=True)
+    page.contents_add(pikepdf.Stream(pdf, b"\nQ"))
+    page.mediabox = pikepdf.Array([0, 0, w * f, h * f])
+    if "/CropBox" in page.obj:
+        del page.obj["/CropBox"]
+    return True
+
+
+def fix_smask_colorspace(pdf: pikepdf.Pdf) -> None:
+    """recode_pdf legt die Maske im ICC-Farbraum an; die PDF-Norm verlangt DeviceGray
+    (sonst zeigt z. B. Poppler nur den Hintergrund)."""
+    for page in pdf.pages:
+        for image in page.get_images().values():
+            smask = image.get("/SMask")
+            if smask is not None and smask.get("/ColorSpace") != pikepdf.Name.DeviceGray:
+                smask.ColorSpace = pikepdf.Name.DeviceGray
+
+
+def build(src: Path, keep: list[int], settings: Settings, work: Path) -> tuple[Path, list[bool]]:
+    result = pikepdf.new()
+    text_kept = []
+    with pikepdf.open(src) as source:
+        for n, index in enumerate(keep):
+            page_dir = work / f"p{n:04d}"
+            page_dir.mkdir()
+            single = pikepdf.new()
+            single.pages.append(source.pages[index])
+            single.save(page_dir / "in.pdf")
+            encoded, had_text = encode_page(page_dir / "in.pdf", page_dir, settings)
+            text_kept.append(had_text)
+            with pikepdf.open(encoded) as part:
+                result.pages.extend(part.pages)
+    resized = sum(fit_a4(result, page) for page in result.pages)
+    if resized:
+        log(f"{resized} Seite(n) mit falscher Seitengröße auf A4 skaliert")
+    fix_smask_colorspace(result)
+    out = work / "result.pdf"
+    result.save(out, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.generate)
+    return out, text_kept
+
+
+def verify(src: Path, keep: list[int], out: Path, text_kept: list[bool], work: Path) -> None:
+    """Wirft eine Ausnahme, wenn das Ergebnis nicht verwendet werden darf."""
+    with pymupdf.open(src) as before, pymupdf.open(out) as after:
+        if after.page_count != len(keep):
+            raise RuntimeError(f"Seitenzahl {after.page_count} statt {len(keep)}")
+        for n, index in enumerate(keep):
+            if not text_kept[n]:
+                continue
+            words_before = len(before[index].get_text("words"))
+            words_after = len(after[n].get_text("words"))
+            if words_after < 0.95 * words_before:
+                raise RuntimeError(f"Seite {index + 1}: Textebene unvollständig ({words_after}/{words_before} Wörter)")
+    check = run("pdftoppm", "-r", "10", "-png", out, work / "check")
+    if "error" in check.stderr.lower():
+        raise RuntimeError(f"Darstellungsprüfung mit Poppler fehlgeschlagen: {check.stderr.strip()}")
+
+
+def process(path: Path, settings: Settings) -> None:
+    if path.suffix.lower() != ".pdf":
+        log(f"{path.name}: keine PDF – unverändert")
+        return
+    with pymupdf.open(path) as doc:
+        if not all(is_scan_page(page) for page in doc):
+            log(f"{path.name}: keine reine Scan-PDF – unverändert")
+            return
+        keep = [i for i, page in enumerate(doc) if ink_percent(page) >= BLANK_INK_PERCENT]
+        pages = doc.page_count
+    if not keep:
+        log(f"{path.name}: alle Seiten leer – unverändert")
+        return
+
+    with tempfile.TemporaryDirectory(prefix="paperless-mrc-") as tmp:
+        work = Path(tmp)
+        out, text_kept = build(path, keep, settings, work)
+        verify(path, keep, out, text_kept, work)
+        size_before, size_after = path.stat().st_size, out.stat().st_size
+        if size_after >= size_before:
+            log(f"{path.name}: Ergebnis nicht kleiner ({size_after // 1024} KB) – unverändert")
+            return
+        staged = path.with_name(path.name + ".mrc-tmp")
+        shutil.copyfile(out, staged)
+        os.replace(staged, path)
+
+    removed = pages - len(keep)
+    source = "übernommen" if all(text_kept) else "per Tesseract" if not any(text_kept) else "gemischt"
+    log(f"{path.name}: {size_before // 1024} KB -> {size_after // 1024} KB, {len(keep)} Seite(n)"
+        f"{f', {removed} leere entfernt' if removed else ''}, Textebene {source}")
+
+
+def main() -> int:
+    working_path = os.environ.get("DOCUMENT_WORKING_PATH")
+    if not working_path:
+        log("DOCUMENT_WORKING_PATH ist nicht gesetzt – nichts zu tun")
+        return 0
+    try:
+        process(Path(working_path), Settings.from_env())
+    except Exception as exc:  # fail-safe: Paperless soll das Original normal verarbeiten
+        detail = exc.stderr.strip()[-500:] if isinstance(exc, subprocess.CalledProcessError) else ""
+        log(f"Fehler, Dokument bleibt unverändert: {exc!r} {detail}".strip())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
