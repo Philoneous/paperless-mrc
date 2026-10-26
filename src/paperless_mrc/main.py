@@ -452,7 +452,8 @@ def process(path: Path, settings: Settings) -> None:
     clock.lap("Erkennung")
     photos, blank, doubtful = [], [], set()
     if settings.remove_blank or settings.skip_photos:
-        stats = pmap(analyse_page, [(path, i) for i in candidates], settings.jobs)
+        # im eigenen Prozess: ~0,1 s je Seite, Prozessstart wäre teurer (live: 2,3 s statt 6,6 s mit 4 Prozessen)
+        stats = [analyse_page(path, i) for i in candidates]
         for i, (ink, paper) in zip(candidates, stats):
             little_ink = ink < settings.blank_ink_percent
             if little_ink and paper >= settings.blank_paper_percent:  # leeres Papier
