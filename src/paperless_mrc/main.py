@@ -83,6 +83,8 @@ class Settings:
     vector_dpi: int = 300  # Rasterauflösung für diese Seiten
     mixed_pdfs: bool = True  # PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert)
     keep_text_layer: bool = True  # vorhandene Textebene übernehmen statt neu erkennen
+    sharpen: int = 150  # Nachschärfen vor der Kodierung in % (Unscharfmaskierung); 0 = aus
+    sharpen_radius: float = 1.5  # Radius in Pixeln bei 200 dpi (skaliert mit der Auflösung)
     max_dpi: int = 0  # Obergrenze der Auflösung für kodierte Seiten; 0 = aus (Originalauflösung)
     timing: bool = False  # Laufzeiten je Schritt und Seite ausgeben (Analyse/Optimierung)
 
@@ -114,6 +116,8 @@ class Settings:
             mixed_pdfs=_env_bool("MRC_MIXED_PDFS", True),
             keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
             max_dpi=max(int(os.environ.get("MRC_MAX_DPI", "0")), 0),
+            sharpen=max(int(os.environ.get("MRC_SHARPEN", "150")), 0),
+            sharpen_radius=max(float(os.environ.get("MRC_SHARPEN_RADIUS", "1.5")), 0.1),
             timing=_env_bool("MRC_TIMING", False),
         )
 
@@ -319,6 +323,12 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
             log(f"{label}: Foto ({found} sicher erkannte Wörter) – unverändert")
             return None, has_text
 
+    if settings.sharpen:
+        # Erst nach der Texterkennung (die würde durch verstärktes Rauschen schlechter): hellgraue,
+        # dünne Striche fallen sonst teils unter die Schwelle der Maske und landen im verkleinerten
+        # Hintergrund – sie wirken dann unscharf. Nachschärfen hebt ihren Kontrast.
+        radius = settings.sharpen_radius * dpi / 200
+        save(image.filter(ImageFilter.UnsharpMask(radius=radius, percent=settings.sharpen, threshold=2)))
     hocr_path = work / "page.hocr"
     hocr_path.write_text(hocr)
     out = work / "page_mrc.pdf"

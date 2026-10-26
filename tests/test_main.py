@@ -359,3 +359,13 @@ def test_parallelitaet_aus_umgebung(monkeypatch):
     assert mrc.Settings.from_env().jobs == 1
     monkeypatch.setenv("MRC_JOBS", "3")
     assert mrc.Settings.from_env().jobs == 3
+
+
+def test_nachschaerfen_einstellbar(tmp_path, rng, monkeypatch):
+    assert (mrc.Settings.from_env().sharpen, mrc.Settings.from_env().sharpen_radius) == (150, 1.5)
+    monkeypatch.setenv("MRC_SHARPEN", "0")
+    monkeypatch.setenv("MRC_SHARPEN_RADIUS", "2")
+    assert (mrc.Settings.from_env().sharpen, mrc.Settings.from_env().sharpen_radius) == (0, 2.0)
+    path = write_scan_pdf(tmp_path / "ohne.pdf", [letter_page(rng)])
+    mrc.process(path, settings(sharpen=0))
+    assert "Jahresabrechnung" in text_of(path)
