@@ -65,6 +65,34 @@ def photo_page(rng: np.random.Generator) -> Image.Image:
     return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
 
 
+def insurance_page(rng: np.random.Generator, halftone: bool = False) -> Image.Image:
+    """Dokument mit grau und farbig hinterlegten Textblöcken (wie Versicherungsscheine), optional im Druckraster."""
+    img = letter_page(rng)
+    d = ImageDraw.Draw(img)
+    font = ImageFont.truetype(FONT, 32)
+    fills = [(200, 200, 200), (190, 215, 240), (250, 225, 180)]
+    for k, (y0, y1) in enumerate([(380, 700), (760, 1100), (1150, 1500), (1550, 2200)]):
+        d.rectangle((90, y0, 1560, y1), fill=fills[k % 3])
+        for j in range(5):
+            d.text((130, y0 + 30 + j * 55), f"Versicherungsnummer {k}{j} Beitrag 12,{j}0 EUR", font=font,
+                   fill=(20, 20, 20))
+    a = np.asarray(img).astype(np.float32)
+    if halftone:
+        yy, xx = np.mgrid[0:a.shape[0], 0:a.shape[1]]
+        dots = ((np.sin(xx * 1.1) * np.sin(yy * 1.1)) > 0.2)[..., None]
+        tinted = a.mean(axis=2, keepdims=True) < 245
+        a = np.where(tinted & dots, a * 0.85, np.where(tinted, np.minimum(a * 1.1, 255), a))
+    return Image.fromarray(np.clip(a + rng.normal(0, 3, a.shape[:2])[..., None], 0, 255).astype(np.uint8))
+
+
+def wall_photo(rng: np.random.Generator) -> Image.Image:
+    """Foto einer fast einfarbigen Wand: weicher Helligkeitsverlauf, kein Text, kein Papierweiß."""
+    y, x = np.mgrid[0:A4_PX[1], 0:A4_PX[0]].astype(np.float32)
+    v = 150 + 40 * (x / A4_PX[0]) - 30 * (y / A4_PX[1])
+    a = np.stack([v, v * 0.95, v * 0.85], axis=2) + rng.normal(0, 4, (A4_PX[1], A4_PX[0], 1))
+    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+
+
 def add_vector_scan_page(doc: pymupdf.Document, img: Image.Image) -> None:
     """Hängt eine Seite an, die das Bild als viele kleine Rechtecke enthält (vektorisierter Scan)."""
     page = doc.new_page(width=A4_PT[0], height=A4_PT[1])

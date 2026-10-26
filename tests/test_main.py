@@ -4,7 +4,8 @@ from pathlib import Path
 import pikepdf
 import pymupdf
 import pytest
-from conftest import add_vector_scan_page, blank_back, letter_page, page_number_only, photo_page, write_scan_pdf
+from conftest import (add_vector_scan_page, blank_back, insurance_page, letter_page, page_number_only, photo_page,
+                      wall_photo, write_scan_pdf)
 from PIL import Image
 
 from paperless_mrc import main as mrc
@@ -212,7 +213,7 @@ def image_sizes(page: pymupdf.Page) -> list[tuple[int, int]]:
 def test_fotoseite_bleibt_unveraendert(tmp_path, rng):
     path = write_scan_pdf(tmp_path / "foto.pdf", [letter_page(rng), photo_page(rng)])
     with pymupdf.open(path) as doc:
-        assert mrc.paper_percent(doc[0]) > 80 and mrc.paper_percent(doc[1]) < 30
+        assert mrc.flat_percent(doc[0]) > 80 and mrc.flat_percent(doc[1]) < 30
         photo_before = image_sizes(doc[1])
     mrc.process(path, SETTINGS)
     with pymupdf.open(path) as doc:
@@ -274,14 +275,37 @@ def test_textebene_neu_erkennen(tmp_path, rng):
 
 
 def test_neue_einstellungen_aus_umgebung(monkeypatch):
-    names = ("MRC_DESKEW_MIN_ANGLE", "MRC_DESKEW_MAX_ANGLE", "MRC_SKIP_PHOTOS", "MRC_PHOTO_PAPER_PERCENT",
-             "MRC_VECTOR_PAGES", "MRC_VECTOR_MIN_ITEMS", "MRC_VECTOR_DPI", "MRC_MIXED_PDFS", "MRC_KEEP_TEXT_LAYER")
+    names = ("MRC_DESKEW_MIN_ANGLE", "MRC_DESKEW_MAX_ANGLE", "MRC_SKIP_PHOTOS", "MRC_PHOTO_FLAT_PERCENT",
+             "MRC_VECTOR_PAGES", "MRC_VECTOR_MIN_ITEMS", "MRC_VECTOR_DPI", "MRC_MIXED_PDFS", "MRC_KEEP_TEXT_LAYER",
+             "MRC_BLANK_PAPER_PERCENT")
     for name in names:
         monkeypatch.delenv(name, raising=False)
     s = mrc.Settings.from_env()
-    fields = lambda s: (s.deskew_min, s.deskew_max, s.skip_photos, s.photo_paper_percent, s.vector_pages,
-                        s.vector_min_items, s.vector_dpi, s.mixed_pdfs, s.keep_text_layer)
-    assert fields(s) == (0.2, 5.0, True, 50.0, True, 1000, 300, True, True)
-    for name, value in zip(names, ("0.5", "8", "false", "40", "no", "500", "400", "0", "false")):
+    fields = lambda s: (s.deskew_min, s.deskew_max, s.skip_photos, s.photo_flat_percent, s.vector_pages,
+                        s.vector_min_items, s.vector_dpi, s.mixed_pdfs, s.keep_text_layer, s.blank_paper_percent)
+    assert fields(s) == (0.2, 5.0, True, 60.0, True, 1000, 300, True, True, 90.0)
+    for name, value in zip(names, ("0.5", "8", "false", "40", "no", "500", "400", "0", "false", "95")):
         monkeypatch.setenv(name, value)
-    assert fields(mrc.Settings.from_env()) == (0.5, 8.0, False, 40.0, False, 500, 400, False, False)
+    assert fields(mrc.Settings.from_env()) == (0.5, 8.0, False, 40.0, False, 500, 400, False, False, 95.0)
+
+
+@pytest.mark.parametrize("halftone", [False, True])
+def test_hinterlegte_textbloecke_sind_kein_foto(tmp_path, rng, halftone):
+    path = write_scan_pdf(tmp_path / "versicherung.pdf", [insurance_page(rng, halftone)])
+    with pymupdf.open(path) as doc:
+        assert mrc.paper_percent(doc[0]) < 50  # alte Papierflächen-Erkennung hätte es für ein Foto gehalten
+        assert mrc.flat_percent(doc[0]) > 80
+    size_before = path.stat().st_size
+    mrc.process(path, SETTINGS)
+    assert path.stat().st_size < size_before / 3
+    assert "Versicherungsnummer" in text_of(path)
+
+
+def test_wandfoto_wird_weder_geloescht_noch_komprimiert(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "wand.pdf", [letter_page(rng), wall_photo(rng)])
+    with pymupdf.open(path) as doc:
+        wall_before = image_sizes(doc[1])
+    mrc.process(path, SETTINGS)
+    with pymupdf.open(path) as doc:
+        assert doc.page_count == 2
+        assert image_sizes(doc[1]) == wall_before

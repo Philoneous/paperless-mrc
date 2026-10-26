@@ -73,7 +73,8 @@ class Settings:
     deskew_min: float = MIN_SKEW_DEG  # kleinere Schräglagen werden nicht korrigiert
     deskew_max: float = 5.0  # gesuchter Bereich ±; Ergebnis am Rand gilt als unklar → nicht drehen
     skip_photos: bool = True  # Fotoseiten unverändert lassen
-    photo_paper_percent: float = 50.0  # Seite gilt als Foto unter diesem Anteil Papierfläche in %
+    photo_flat_percent: float = 60.0  # Seite gilt als Foto unter diesem Anteil einheitlicher Farbflächen in %
+    blank_paper_percent: float = 90.0  # leer nur, wenn mindestens so viel Fläche Papierton hat (%)
     vector_pages: bool = True  # in Vektorgrafik umgewandelte Scans rastern und komprimieren
     vector_min_items: int = 1000  # ab so vielen Vektorelementen (ohne Bild und Text) gilt eine Seite als solcher Scan
     vector_dpi: int = 300  # Rasterauflösung für diese Seiten
@@ -98,7 +99,8 @@ class Settings:
             deskew_min=max(float(os.environ.get("MRC_DESKEW_MIN_ANGLE", MIN_SKEW_DEG)), 0.0),
             deskew_max=min(max(float(os.environ.get("MRC_DESKEW_MAX_ANGLE", "5")), 0.5), 45.0),
             skip_photos=_env_bool("MRC_SKIP_PHOTOS", True),
-            photo_paper_percent=float(os.environ.get("MRC_PHOTO_PAPER_PERCENT", "50")),
+            photo_flat_percent=float(os.environ.get("MRC_PHOTO_FLAT_PERCENT", "60")),
+            blank_paper_percent=float(os.environ.get("MRC_BLANK_PAPER_PERCENT", "90")),
             vector_pages=_env_bool("MRC_VECTOR_PAGES", True),
             vector_min_items=max(int(os.environ.get("MRC_VECTOR_MIN_ITEMS", "1000")), 1),
             vector_dpi=min(max(int(os.environ.get("MRC_VECTOR_DPI", "300")), 72), 1200),
@@ -148,8 +150,8 @@ def ink_percent(page: pymupdf.Page) -> float:
 
 
 def paper_percent(page: pymupdf.Page) -> float:
-    """Anteil der Fläche in Papierton (hell, ungesättigt) in %. Dokumentseiten liegen
-    bei 60–98 %, Fotos bei 10–45 % (gemessen an echten Scans; 3 % Rand ignoriert)."""
+    """Anteil der Fläche in Papierton (hell, ungesättigt) in %; 3 % Rand ignoriert.
+    Für die Leerseitenprüfung: eine leere Seite ist fast vollständig Papier."""
     zoom = 600 / page.rect.width
     pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csRGB, alpha=False)
     a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3).astype(np.int16)
@@ -161,11 +163,28 @@ def paper_percent(page: pymupdf.Page) -> float:
     return float(((np.abs(luma - paper) < 30) & (saturation < 40)).mean() * 100)
 
 
-def analyse_page(path: Path, index: int, ink: bool, paper: bool) -> tuple[float | None, float | None]:
-    """Tintenanteil und Papieranteil einer Seite (None, wenn nicht angefordert)."""
+def flat_percent(page: pymupdf.Page, colors: int = 8, tolerance: float = 20.0) -> float:
+    """Anteil der Fläche in % (3 % Rand ignoriert), der sich mit wenigen einheitlichen Farben
+    darstellen lässt. Dokumente bestehen aus Papier, Schrift und Farbflächen (auch graue oder
+    farbige Hinterlegungen), Fotos aus Verläufen und Strukturen. Weichzeichnen und Verkleinern
+    gleichen Scanrauschen und Druckraster aus."""
+    zoom = 600 / page.rect.width
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csRGB, alpha=False)
+    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).filter(ImageFilter.BoxBlur(1)).reduce(2)
+    m = int(0.03 * img.width)
+    img = img.crop((m, m, img.width - m, img.height - m))
+    palette = np.array(img.quantize(colors, method=Image.Quantize.MEDIANCUT).getpalette()[:colors * 3],
+                       np.float32).reshape(-1, 3)
+    pixels = np.asarray(img, np.float32).reshape(-1, 1, 3)
+    distance = np.sqrt(((pixels - palette[None]) ** 2).sum(axis=2)).min(axis=1)
+    return float((distance < tolerance).mean() * 100)
+
+
+def analyse_page(path: Path, index: int) -> tuple[float, float, float]:
+    """Tintenanteil, Papieranteil und Anteil einheitlicher Farbflächen einer Seite (je %)."""
     with pymupdf.open(path) as doc:
         page = doc[index]
-        return (ink_percent(page) if ink else None), (paper_percent(page) if paper else None)
+        return ink_percent(page), paper_percent(page), flat_percent(page)
 
 
 def pmap(fn, args: list[tuple], jobs: int) -> list:
@@ -375,15 +394,15 @@ def process(path: Path, settings: Settings) -> None:
 
     photos, blank = [], []
     if settings.remove_blank or settings.skip_photos:
-        # Papieranteil auch für die Leerseitenprüfung: ein weiches Foto hat kaum „Tinte“,
-        # ist aber nicht leer
-        args = [(path, i, settings.remove_blank, True) for i in candidates]
-        for i, (ink, paper) in zip(candidates, pmap(analyse_page, args, settings.jobs)):
-            is_paper = paper >= settings.photo_paper_percent
-            if settings.skip_photos and i in scans and not is_paper:
+        stats = pmap(analyse_page, [(path, i) for i in candidates], settings.jobs)
+        for i, (ink, paper, flat) in zip(candidates, stats):
+            little_ink = ink < settings.blank_ink_percent
+            if little_ink and paper >= settings.blank_paper_percent:  # leeres Papier
+                if settings.remove_blank:
+                    blank.append(i)
+            elif settings.skip_photos and i in scans and (flat < settings.photo_flat_percent or little_ink):
+                # Verläufe/Strukturen – oder kaum Kontraste, aber kein Papier (z. B. Foto einer Wand)
                 photos.append(i)
-            elif ink is not None and ink < settings.blank_ink_percent and is_paper:
-                blank.append(i)
     encode = [i for i in candidates if i not in photos and i not in blank]
     if not encode:
         log(f"{path.name}: keine Seite zu komprimieren ({len(photos)} Foto, {len(blank)} leer) – unverändert")
