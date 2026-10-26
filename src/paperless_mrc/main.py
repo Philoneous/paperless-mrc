@@ -64,6 +64,12 @@ class Settings:
     rotate: bool
     rotate_threshold: float
     jobs: int = 1  # Seiten parallel; wie Paperless' OCRmyPDF-Aufruf (THREADS_PER_WORKER)
+    # Eigene Einstellungen (MRC_*), Standardwerte = bisheriges festes Verhalten
+    remove_blank: bool = True
+    blank_ink_percent: float = BLANK_INK_PERCENT
+    bg_downsample: int = 2  # Hintergrund in 1/n der Auflösung
+    bg_rate: float = 200.0  # JPEG2000-Kompressionsrate des Hintergrunds (opj_compress -r)
+    fit_a4: bool = True
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -75,6 +81,11 @@ class Settings:
             rotate=_env_bool("PAPERLESS_OCR_ROTATE_PAGES", True),
             rotate_threshold=float(os.environ.get("PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD", "12.0")),
             jobs=max(int(os.environ.get("PAPERLESS_THREADS_PER_WORKER", default_jobs)), 1),
+            remove_blank=_env_bool("MRC_REMOVE_BLANK_PAGES", True),
+            blank_ink_percent=float(os.environ.get("MRC_BLANK_INK_PERCENT", BLANK_INK_PERCENT)),
+            bg_downsample=max(int(os.environ.get("MRC_BG_DOWNSAMPLE", "2")), 1),
+            bg_rate=max(float(os.environ.get("MRC_BG_COMPRESSION_RATE", "200")), 1.0),
+            fit_a4=_env_bool("MRC_FIT_A4", True),
         )
 
 
@@ -192,7 +203,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
     mask = "jbig2" if shutil.which("jbig2") else "ccitt"
     run("recode_pdf", "-I", image_path, "-T", hocr_path, "-o", out, "--dpi", str(round(dpi)),
         "-J", "openjpeg", "--mrc-image-format", "jpeg2000", "--mask-compression", mask,
-        "--bg-downsample", "2", "--bg-compression-flags=-r 200")
+        "--bg-downsample", str(settings.bg_downsample), f"--bg-compression-flags=-r {settings.bg_rate:g}")
     return out, has_text
 
 
@@ -257,7 +268,7 @@ def build(src: Path, encode: list[int], blank: list[int], settings: Settings,
             part = parts.enter_context(pikepdf.open(path))  # bis zum Speichern offen halten
             page = pdf.pages[index]
             replace_page_content(pdf, page, part.pages[0])
-            resized += fit_a4(pdf, page)
+            resized += settings.fit_a4 and fit_a4(pdf, page)
             fix_smask_colorspace(page)
         if resized:
             log(f"{resized} Seite(n) mit falscher Seitengröße auf A4 skaliert")
@@ -299,8 +310,10 @@ def process(path: Path, settings: Settings) -> None:
     if not scans:
         log(f"{path.name}: keine gescannten Seiten – unverändert")
         return
-    inks = pmap(page_ink_percent, [(path, i) for i in scans], settings.jobs)
-    blank = [i for i, ink in zip(scans, inks) if ink < BLANK_INK_PERCENT]
+    blank = []
+    if settings.remove_blank:
+        inks = pmap(page_ink_percent, [(path, i) for i in scans], settings.jobs)
+        blank = [i for i, ink in zip(scans, inks) if ink < settings.blank_ink_percent]
     encode = [i for i in scans if i not in blank]
     if not encode:
         log(f"{path.name}: alle gescannten Seiten leer – unverändert")

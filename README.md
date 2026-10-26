@@ -85,6 +85,16 @@ Das Skript übernimmt diese Paperless-Einstellungen aus `paperless.conf` (mit de
 Werte, die nur in der Weboberfläche unter *Konfiguration* gesetzt sind, sieht das Skript nicht – deshalb trägt der
 Installer die Sprachen zusätzlich in `paperless.conf` ein.
 
+Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt der Standardwert):
+
+| Variable | Standard | Wirkung |
+|---|---|---|
+| `MRC_REMOVE_BLANK_PAGES` | `true` | Leere gescannte Seiten entfernen |
+| `MRC_BLANK_INK_PERCENT` | `0.005` | Seite gilt als leer unter diesem Tintenanteil in % (eine Seitenzahl liegt bei ca. 0,05 %) |
+| `MRC_BG_DOWNSAMPLE` | `2` | Hintergrund in 1/n der Scan-Auflösung (Text und Linien bleiben in voller Auflösung) |
+| `MRC_BG_COMPRESSION_RATE` | `200` | JPEG2000-Kompressionsrate des Hintergrunds; höher = kleiner, aber Farbflächen und hellgraue Schrift leiden |
+| `MRC_FIT_A4` | `true` | Offensichtlich falsche Seitengrößen (z. B. 72-ppi-Handyscans) auf A4 skalieren |
+
 ## Einschränkungen
 
 - **Verlustbehaftet:** Das Original wird ersetzt; es gibt danach nur noch die MRC-Version.

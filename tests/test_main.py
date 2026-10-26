@@ -143,6 +143,49 @@ def test_fehler_laesst_datei_unveraendert(tmp_path, rng, monkeypatch, capsys):
     assert "bleibt unverändert" in capsys.readouterr().out
 
 
+def test_mrc_einstellungen_aus_umgebung(monkeypatch):
+    for name in ("MRC_REMOVE_BLANK_PAGES", "MRC_BLANK_INK_PERCENT", "MRC_BG_DOWNSAMPLE",
+                 "MRC_BG_COMPRESSION_RATE", "MRC_FIT_A4"):
+        monkeypatch.delenv(name, raising=False)
+    s = mrc.Settings.from_env()
+    assert (s.remove_blank, s.blank_ink_percent, s.bg_downsample, s.bg_rate, s.fit_a4) == (
+        True, mrc.BLANK_INK_PERCENT, 2, 200.0, True)  # bisheriges Verhalten
+    monkeypatch.setenv("MRC_REMOVE_BLANK_PAGES", "false")
+    monkeypatch.setenv("MRC_BLANK_INK_PERCENT", "0.02")
+    monkeypatch.setenv("MRC_BG_DOWNSAMPLE", "3")
+    monkeypatch.setenv("MRC_BG_COMPRESSION_RATE", "400")
+    monkeypatch.setenv("MRC_FIT_A4", "no")
+    s = mrc.Settings.from_env()
+    assert (s.remove_blank, s.blank_ink_percent, s.bg_downsample, s.bg_rate, s.fit_a4) == (
+        False, 0.02, 3, 400.0, False)
+
+
+def test_leere_seiten_bleiben_wenn_abgeschaltet(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "leer_bleibt.pdf", [letter_page(rng), blank_back(rng)])
+    mrc.process(path, mrc.Settings(language="deu", deskew=True, rotate=True, rotate_threshold=12.0,
+                                   remove_blank=False))
+    assert page_count(path) == 2
+
+
+def test_a4_korrektur_abschaltbar(tmp_path, rng):
+    img = letter_page(rng)
+    path = write_scan_pdf(tmp_path / "gross_bleibt.pdf", [img], page_size=(img.width, img.height))
+    mrc.process(path, mrc.Settings(language="deu", deskew=True, rotate=True, rotate_threshold=12.0,
+                                   fit_a4=False))
+    with pymupdf.open(path) as doc:
+        assert doc[0].rect.width > 1000
+
+
+def test_staerkere_hintergrundkompression_wird_kleiner(tmp_path, rng):
+    img = letter_page(rng)
+    normal = write_scan_pdf(tmp_path / "normal.pdf", [img])
+    stark = write_scan_pdf(tmp_path / "stark.pdf", [img])
+    mrc.process(normal, SETTINGS)
+    mrc.process(stark, mrc.Settings(language="deu", deskew=True, rotate=True, rotate_threshold=12.0,
+                                    bg_downsample=4, bg_rate=800))
+    assert stark.stat().st_size < normal.stat().st_size
+
+
 REAL = os.environ.get("PAPERLESS_MRC_TESTFILES")
 
 
