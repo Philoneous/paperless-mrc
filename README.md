@@ -112,6 +112,7 @@ Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt
 | `MRC_DESKEW_MAX_ANGLE` | `5` | Gesuchter Bereich ± in Grad; ein Ergebnis am Rand gilt als unklar und wird nicht korrigiert |
 | `MRC_MIXED_PDFS` | `true` | PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert); `false`: nur reine Scan-PDFs |
 | `MRC_KEEP_TEXT_LAYER` | `true` | Vorhandene Textebene übernehmen; `false`: immer neu mit Tesseract erkennen (dann auch drehen/begradigen) |
+| `MRC_TIMING` | `false` | Laufzeiten je Seite und Arbeitsschritt ins Log schreiben (zur Analyse) |
 
 Bewusst **nicht** abschaltbar: digital signierte PDFs bleiben unverändert (sonst wird die Signatur ungültig), und die
 Datei wird nur ersetzt, wenn die Prüfung bestanden ist und das Ergebnis kleiner ist.

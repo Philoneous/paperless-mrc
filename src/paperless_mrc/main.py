@@ -28,6 +28,7 @@ import subprocess
 import sys
 import multiprocessing
 import tempfile
+import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,7 @@ class Settings:
     vector_dpi: int = 300  # Rasterauflösung für diese Seiten
     mixed_pdfs: bool = True  # PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert)
     keep_text_layer: bool = True  # vorhandene Textebene übernehmen statt neu erkennen
+    timing: bool = False  # Laufzeiten je Schritt und Seite ausgeben (Analyse/Optimierung)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -106,7 +108,25 @@ class Settings:
             vector_dpi=min(max(int(os.environ.get("MRC_VECTOR_DPI", "300")), 72), 1200),
             mixed_pdfs=_env_bool("MRC_MIXED_PDFS", True),
             keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
+            timing=_env_bool("MRC_TIMING", False),
         )
+
+
+class Stopwatch:
+    """Misst aufeinanderfolgende Schritte: lap("Name") schließt den laufenden Schritt ab."""
+
+    def __init__(self) -> None:
+        self.start = self.last = time.perf_counter()
+        self.laps: list[tuple[str, float]] = []
+
+    def lap(self, name: str) -> None:
+        now = time.perf_counter()
+        self.laps.append((name, now - self.last))
+        self.last = now
+
+    def __str__(self) -> str:
+        parts = ", ".join(f"{name} {seconds:.1f}s" for name, seconds in self.laps)
+        return f"{parts} | gesamt {self.last - self.start:.1f}s"
 
 
 def run(*cmd: str | Path) -> subprocess.CompletedProcess:
@@ -235,12 +255,14 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
                 render_dpi: float | None = None) -> tuple[Path, bool]:
     """Kodiert eine einseitige Scan-PDF per MRC. Rückgabe: Ergebnis, Textebene übernommen?
     render_dpi: feste Auflösung (Vektorseiten); sonst die des Seitenbilds."""
+    clock = Stopwatch()
     meta_file = work / "meta.json"
     meta_file.write_text(run("pdf-metadata-json", page_pdf).stdout)
     if render_dpi:
         scale = render_dpi / 72
     else:
         scale = json.loads(meta_file.read_text())["page_data"][0]["estimated_scale"]
+    clock.lap("Metadaten")
 
     with pymupdf.open(page_pdf) as doc:
         pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(scale, scale), colorspace=pymupdf.csRGB, alpha=False)
@@ -249,6 +271,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
     image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
     image_path = work / "page.png"
     dpi = 72 * scale
+    clock.lap("Rendern")
 
     def save(img: Image.Image) -> None:
         img.save(image_path, dpi=(dpi, dpi), compress_level=1)  # Zwischendatei: schnell statt klein
@@ -256,11 +279,13 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
     if has_text:
         hocr = run("pdf-to-hocr", "-f", page_pdf, "-J", meta_file).stdout
         save(image)
+        clock.lap("Textebene")
     else:
         save(image)
         if settings.rotate and (rotate := orientation(image_path, settings.rotate_threshold)):
             image = image.rotate(-rotate, expand=True)
             log(f"{label}: um {rotate}° gedreht")
+        clock.lap("Ausrichtung")
         if settings.deskew:
             angle = skew_angle(image, settings.deskew_max)
             if angle is None:
@@ -269,7 +294,9 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
                 image = image.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
                 log(f"{label}: Schräglage {angle:+.1f}° korrigiert")
         save(image)
+        clock.lap("Begradigen")
         hocr = run("tesseract", image_path, "-", "-l", settings.language, "hocr").stdout
+        clock.lap("OCR")
 
     hocr_path = work / "page.hocr"
     hocr_path.write_text(hocr)
@@ -278,6 +305,9 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
     run("recode_pdf", "-I", image_path, "-T", hocr_path, "-o", out, "--dpi", str(round(dpi)),
         "-J", "openjpeg", "--mrc-image-format", "jpeg2000", "--mask-compression", mask,
         "--bg-downsample", str(settings.bg_downsample), f"--bg-compression-flags=-r {settings.bg_rate:g}")
+    clock.lap("MRC")
+    if settings.timing:
+        log(f"{label}: Zeit {clock} ({image.width}x{image.height} px, {dpi:.0f} dpi)")
     return out, has_text
 
 
@@ -376,6 +406,7 @@ def process(path: Path, settings: Settings) -> None:
     if path.suffix.lower() != ".pdf":
         log(f"{path.name}: keine PDF – unverändert")
         return
+    clock = Stopwatch()
     with pymupdf.open(path) as doc:
         if doc.get_sigflags() > 0:
             log(f"{path.name}: digital signiert – unverändert, damit die Signatur gültig bleibt")
@@ -392,6 +423,7 @@ def process(path: Path, settings: Settings) -> None:
         log(f"{path.name}: enthält nicht gescannte Seiten – unverändert (MRC_MIXED_PDFS aus)")
         return
 
+    clock.lap("Erkennung")
     photos, blank = [], []
     if settings.remove_blank or settings.skip_photos:
         stats = pmap(analyse_page, [(path, i) for i in candidates], settings.jobs)
@@ -403,6 +435,7 @@ def process(path: Path, settings: Settings) -> None:
             elif settings.skip_photos and i in scans and (flat < settings.photo_flat_percent or little_ink):
                 # Verläufe/Strukturen – oder kaum Kontraste, aber kein Papier (z. B. Foto einer Wand)
                 photos.append(i)
+    clock.lap("Seitenanalyse")
     encode = [i for i in candidates if i not in photos and i not in blank]
     if not encode:
         log(f"{path.name}: keine Seite zu komprimieren ({len(photos)} Foto, {len(blank)} leer) – unverändert")
@@ -413,8 +446,10 @@ def process(path: Path, settings: Settings) -> None:
     with tempfile.TemporaryDirectory(prefix="paperless-mrc-") as tmp:
         work = Path(tmp)
         out, text_kept = build(path, encode, blank, settings, work, set(vectors))
+        clock.lap(f"Kodieren ({len(encode)} S., {settings.jobs} parallel)")
         must_keep_text = {i for i, had in zip(encode, text_kept) if had} | (set(keep) - set(encode))
         verify(path, keep, out, must_keep_text, work)
+        clock.lap("Prüfung")
         size_before, size_after = path.stat().st_size, out.stat().st_size
         if size_after >= size_before:
             log(f"{path.name}: Ergebnis nicht kleiner ({size_after // 1024} KB) – unverändert")
@@ -428,6 +463,8 @@ def process(path: Path, settings: Settings) -> None:
                f"{len(photos)} Foto(s) unverändert" if photos else "",
                f"{len([i for i in vectors if i in encode])} vektorisierte gerastert" if vectors else "",
                f"{others} digitale unverändert" if others else ""]
+    if settings.timing:
+        log(f"{path.name}: Zeit {clock}")
     log(f"{path.name}: {size_before // 1024} KB -> {size_after // 1024} KB, {len(keep)} Seite(n)"
         + "".join(f", {d}" for d in details if d) + f", Textebene {source}")
 

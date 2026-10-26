@@ -309,3 +309,11 @@ def test_wandfoto_wird_weder_geloescht_noch_komprimiert(tmp_path, rng):
     with pymupdf.open(path) as doc:
         assert doc.page_count == 2
         assert image_sizes(doc[1]) == wall_before
+
+
+def test_zeitmessung(tmp_path, rng, capsys):
+    path = write_scan_pdf(tmp_path / "zeit.pdf", [letter_page(rng)])
+    mrc.process(path, settings(timing=True))
+    out = capsys.readouterr().out
+    assert "Seite 1: Zeit Metadaten" in out and "MRC" in out
+    assert "zeit.pdf: Zeit Erkennung" in out and "Prüfung" in out
