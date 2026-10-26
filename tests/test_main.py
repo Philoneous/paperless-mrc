@@ -369,3 +369,13 @@ def test_nachschaerfen_einstellbar(tmp_path, rng, monkeypatch):
     path = write_scan_pdf(tmp_path / "ohne.pdf", [letter_page(rng)])
     mrc.process(path, settings(sharpen=0))
     assert "Jahresabrechnung" in text_of(path)
+
+
+def test_maskenfaktor(tmp_path, rng, monkeypatch):
+    assert mrc.Settings.from_env().mask_sensitivity == 0.5
+    monkeypatch.setenv("MRC_MASK_FACTOR", "1")
+    assert mrc.Settings.from_env().mask_sensitivity == 1.0
+    for factor in (1.0, 0.3):
+        path = write_scan_pdf(tmp_path / f"maske{factor}.pdf", [letter_page(rng)])
+        mrc.process(path, settings(mask_sensitivity=factor))
+        assert "Jahresabrechnung" in text_of(path)

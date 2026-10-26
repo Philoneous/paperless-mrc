@@ -85,6 +85,7 @@ class Settings:
     keep_text_layer: bool = True  # vorhandene Textebene übernehmen statt neu erkennen
     sharpen: int = 150  # Nachschärfen vor der Kodierung in % (Unscharfmaskierung); 0 = aus
     sharpen_radius: float = 1.5  # Radius in Pixeln bei 200 dpi (skaliert mit der Auflösung)
+    mask_sensitivity: float = 0.5  # Faktor auf die Schwellen der Textmaske; kleiner = mehr Schrift scharf, 1 = recode_pdf-Standard
     max_dpi: int = 0  # Obergrenze der Auflösung für kodierte Seiten; 0 = aus (Originalauflösung)
     timing: bool = False  # Laufzeiten je Schritt und Seite ausgeben (Analyse/Optimierung)
 
@@ -117,6 +118,7 @@ class Settings:
             keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
             max_dpi=max(int(os.environ.get("MRC_MAX_DPI", "0")), 0),
             sharpen=max(int(os.environ.get("MRC_SHARPEN", "150")), 0),
+            mask_sensitivity=min(max(float(os.environ.get("MRC_MASK_FACTOR", "0.5")), 0.1), 2.0),
             sharpen_radius=max(float(os.environ.get("MRC_SHARPEN_RADIUS", "1.5")), 0.1),
             timing=_env_bool("MRC_TIMING", False),
         )
@@ -333,7 +335,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
     hocr_path.write_text(hocr)
     out = work / "page_mrc.pdf"
     mask = "jbig2" if shutil.which("jbig2") else "ccitt"
-    run("recode_pdf", "-I", image_path, "-T", hocr_path, "-o", out, "--dpi", str(round(dpi)),
+    run(sys.executable, "-m", "paperless_mrc.recode", f"{settings.mask_sensitivity:g}", "-I", image_path, "-T", hocr_path, "-o", out, "--dpi", str(round(dpi)),
         "-J", "openjpeg", "--mrc-image-format", "jpeg2000", "--mask-compression", mask,
         "--bg-downsample", str(settings.bg_downsample), f"--bg-compression-flags=-r {settings.bg_rate:g}")
     clock.lap("MRC")

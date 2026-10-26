@@ -485,7 +485,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "archive-pdf-tools", specifier = ">=1.5.7" },
+    { name = "archive-pdf-tools", specifier = ">=1.5.7,<1.6" },
     { name = "numpy" },
     { name = "pikepdf", specifier = ">=10.0" },
     { name = "pillow" },
