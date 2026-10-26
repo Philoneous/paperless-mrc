@@ -351,3 +351,11 @@ def test_hoechstaufloesung(tmp_path, rng):
         widths = [w for _, _, w, *_ in doc[0].get_images()]
     assert max(widths) <= round(595.28 / 72 * 100) + 2
     assert mrc.Settings.from_env().max_dpi == 0  # Standard: aus
+
+
+def test_parallelitaet_aus_umgebung(monkeypatch):
+    monkeypatch.setenv("PAPERLESS_THREADS_PER_WORKER", "1")
+    monkeypatch.delenv("MRC_JOBS", raising=False)
+    assert mrc.Settings.from_env().jobs == 1
+    monkeypatch.setenv("MRC_JOBS", "3")
+    assert mrc.Settings.from_env().jobs == 3

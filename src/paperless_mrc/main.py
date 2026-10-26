@@ -95,7 +95,8 @@ class Settings:
             deskew=_env_bool("PAPERLESS_OCR_DESKEW", True),
             rotate=_env_bool("PAPERLESS_OCR_ROTATE_PAGES", True),
             rotate_threshold=float(os.environ.get("PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD", "12.0")),
-            jobs=max(int(os.environ.get("PAPERLESS_THREADS_PER_WORKER", default_jobs)), 1),
+            # MRC_JOBS (eigener Wert) vor PAPERLESS_THREADS_PER_WORKER vor Kerne ÷ Worker
+            jobs=max(int(os.environ.get("MRC_JOBS") or os.environ.get("PAPERLESS_THREADS_PER_WORKER") or default_jobs), 1),
             remove_blank=_env_bool("MRC_REMOVE_BLANK_PAGES", True),
             blank_ink_percent=float(os.environ.get("MRC_BLANK_INK_PERCENT", BLANK_INK_PERCENT)),
             bg_downsample=max(int(os.environ.get("MRC_BG_DOWNSAMPLE", "2")), 1),
