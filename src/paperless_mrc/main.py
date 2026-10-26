@@ -83,6 +83,7 @@ class Settings:
     vector_dpi: int = 300  # Rasterauflösung für diese Seiten
     mixed_pdfs: bool = True  # PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert)
     keep_text_layer: bool = True  # vorhandene Textebene übernehmen statt neu erkennen
+    max_dpi: int = 0  # Obergrenze der Auflösung für kodierte Seiten; 0 = aus (Originalauflösung)
     timing: bool = False  # Laufzeiten je Schritt und Seite ausgeben (Analyse/Optimierung)
 
     @classmethod
@@ -111,6 +112,7 @@ class Settings:
             vector_dpi=min(max(int(os.environ.get("MRC_VECTOR_DPI", "300")), 72), 1200),
             mixed_pdfs=_env_bool("MRC_MIXED_PDFS", True),
             keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
+            max_dpi=max(int(os.environ.get("MRC_MAX_DPI", "0")), 0),
             timing=_env_bool("MRC_TIMING", False),
         )
 
@@ -270,6 +272,8 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
     with pymupdf.open(page_pdf) as doc:
         page = doc[0]
         scale = render_dpi / 72 if render_dpi else image_scale(page)
+        if settings.max_dpi:
+            scale = min(scale, settings.max_dpi / 72)
         pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), colorspace=pymupdf.csRGB, alpha=False)
         words = [w[4] for w in page.get_text("words")]
         has_text = settings.keep_text_layer and bool(words)

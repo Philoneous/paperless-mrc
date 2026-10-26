@@ -341,3 +341,13 @@ def test_sichere_woerter_im_hocr():
             "<span class='ocrx_word' id='w3' title='bbox 1 1 2 2; x_wconf 88'><strong>2026</strong></span>"
             "<span class='ocrx_word' id='w4' title='bbox 1 1 2 2; x_wconf 95'>a.</span>")
     assert mrc.confident_words(hocr) == 2
+
+
+def test_hoechstaufloesung(tmp_path, rng):
+    img = letter_page(rng)  # 200 dpi
+    path = write_scan_pdf(tmp_path / "dpi.pdf", [img])
+    mrc.process(path, settings(max_dpi=100))
+    with pymupdf.open(path) as doc:
+        widths = [w for _, _, w, *_ in doc[0].get_images()]
+    assert max(widths) <= round(595.28 / 72 * 100) + 2
+    assert mrc.Settings.from_env().max_dpi == 0  # Standard: aus

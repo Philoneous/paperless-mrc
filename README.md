@@ -84,7 +84,7 @@ Das Skript übernimmt diese Paperless-Einstellungen aus `paperless.conf` (mit de
 
 | Variable | Wirkung im Skript |
 |---|---|
-| `PAPERLESS_OCR_LANGUAGE` | Tesseract-Sprachen, z. B. `deu+eng+pol` |
+| `PAPERLESS_OCR_LANGUAGE` | Tesseract-Sprachen, z. B. `deu+eng` |
 | `PAPERLESS_OCR_DESKEW` | Schräglage korrigieren (nur Seiten ohne vorhandene Textebene) |
 | `PAPERLESS_OCR_ROTATE_PAGES` | Seiten drehen (nur Seiten ohne vorhandene Textebene) |
 | `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD` | Mindestsicherheit der Drehungserkennung |
@@ -113,6 +113,7 @@ Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt
 | `MRC_DESKEW_MAX_ANGLE` | `5` | Gesuchter Bereich ± in Grad; ein Ergebnis am Rand gilt als unklar und wird nicht korrigiert |
 | `MRC_MIXED_PDFS` | `true` | PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert); `false`: nur reine Scan-PDFs |
 | `MRC_KEEP_TEXT_LAYER` | `true` | Vorhandene Textebene übernehmen; `false`: immer neu mit Tesseract erkennen (dann auch drehen/begradigen) |
+| `MRC_MAX_DPI` | `0` | Höchstauflösung in dpi für komprimierte Seiten (z. B. `300`); höher aufgelöste Scans werden herunterskaliert – schneller und kleiner, feinste Details gehen verloren. `0` = aus |
 | `MRC_TIMING` | `false` | Laufzeiten je Seite und Arbeitsschritt ins Log schreiben (zur Analyse) |
 
 Bewusst **nicht** abschaltbar: digital signierte PDFs bleiben unverändert (sonst wird die Signatur ungültig), und die

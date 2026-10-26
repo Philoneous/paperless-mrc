@@ -12,7 +12,7 @@ set -Eeuo pipefail
 PAPERLESS_DIR="${PAPERLESS_DIR:-/opt/paperless}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/paperless-mrc}"
 REPO_URL="${REPO_URL:-https://github.com/Philoneous/paperless-mrc.git}"
-OCR_LANGUAGE="${OCR_LANGUAGE:-deu+eng+pol}"   # nur eingetragen, wenn in paperless.conf noch nichts steht
+OCR_LANGUAGE="${OCR_LANGUAGE:-deu+eng}"   # nur eingetragen, wenn in paperless.conf noch nichts steht
 CONF="$PAPERLESS_DIR/paperless.conf"
 SCRIPT="$INSTALL_DIR/venv/bin/paperless-mrc"
 
