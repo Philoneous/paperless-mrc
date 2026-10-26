@@ -79,9 +79,9 @@ def insurance_page(rng: np.random.Generator, halftone: bool = False) -> Image.Im
     a = np.asarray(img).astype(np.float32)
     if halftone:
         yy, xx = np.mgrid[0:a.shape[0], 0:a.shape[1]]
-        dots = ((np.sin(xx * 1.1) * np.sin(yy * 1.1)) > 0.2)[..., None]
+        dots = ((np.sin(xx * 2.2) * np.sin(yy * 2.2)) > 0.2)[..., None]  # Raster ca. 100 lpi bei 200 dpi
         tinted = a.mean(axis=2, keepdims=True) < 245
-        a = np.where(tinted & dots, a * 0.85, np.where(tinted, np.minimum(a * 1.1, 255), a))
+        a = np.where(tinted & dots, a * 0.9, np.where(tinted, np.minimum(a * 1.05, 255), a))
     return Image.fromarray(np.clip(a + rng.normal(0, 3, a.shape[:2])[..., None], 0, 255).astype(np.uint8))
 
 

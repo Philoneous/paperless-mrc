@@ -6,7 +6,7 @@ import pymupdf
 import pytest
 from conftest import (add_vector_scan_page, blank_back, insurance_page, letter_page, page_number_only, photo_page,
                       wall_photo, write_scan_pdf)
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from paperless_mrc import main as mrc
 
@@ -213,7 +213,7 @@ def image_sizes(page: pymupdf.Page) -> list[tuple[int, int]]:
 def test_fotoseite_bleibt_unveraendert(tmp_path, rng):
     path = write_scan_pdf(tmp_path / "foto.pdf", [letter_page(rng), photo_page(rng)])
     with pymupdf.open(path) as doc:
-        assert mrc.flat_percent(doc[0]) > 80 and mrc.flat_percent(doc[1]) < 30
+        assert mrc.paper_percent(doc[0]) > 80 and mrc.paper_percent(doc[1]) < 30
         photo_before = image_sizes(doc[1])
     mrc.process(path, SETTINGS)
     with pymupdf.open(path) as doc:
@@ -275,26 +275,26 @@ def test_textebene_neu_erkennen(tmp_path, rng):
 
 
 def test_neue_einstellungen_aus_umgebung(monkeypatch):
-    names = ("MRC_DESKEW_MIN_ANGLE", "MRC_DESKEW_MAX_ANGLE", "MRC_SKIP_PHOTOS", "MRC_PHOTO_FLAT_PERCENT",
+    names = ("MRC_DESKEW_MIN_ANGLE", "MRC_DESKEW_MAX_ANGLE", "MRC_SKIP_PHOTOS", "MRC_PHOTO_PAPER_PERCENT",
              "MRC_VECTOR_PAGES", "MRC_VECTOR_MIN_ITEMS", "MRC_VECTOR_DPI", "MRC_MIXED_PDFS", "MRC_KEEP_TEXT_LAYER",
-             "MRC_BLANK_PAPER_PERCENT")
+             "MRC_BLANK_PAPER_PERCENT", "MRC_PHOTO_MIN_WORDS")
     for name in names:
         monkeypatch.delenv(name, raising=False)
     s = mrc.Settings.from_env()
-    fields = lambda s: (s.deskew_min, s.deskew_max, s.skip_photos, s.photo_flat_percent, s.vector_pages,
-                        s.vector_min_items, s.vector_dpi, s.mixed_pdfs, s.keep_text_layer, s.blank_paper_percent)
-    assert fields(s) == (0.2, 5.0, True, 60.0, True, 1000, 300, True, True, 90.0)
-    for name, value in zip(names, ("0.5", "8", "false", "40", "no", "500", "400", "0", "false", "95")):
+    fields = lambda s: (s.deskew_min, s.deskew_max, s.skip_photos, s.photo_paper_percent, s.vector_pages,
+                        s.vector_min_items, s.vector_dpi, s.mixed_pdfs, s.keep_text_layer, s.blank_paper_percent,
+                        s.photo_min_words)
+    assert fields(s) == (0.2, 5.0, True, 50.0, True, 1000, 300, True, True, 90.0, 10)
+    for name, value in zip(names, ("0.5", "8", "false", "40", "no", "500", "400", "0", "false", "95", "25")):
         monkeypatch.setenv(name, value)
-    assert fields(mrc.Settings.from_env()) == (0.5, 8.0, False, 40.0, False, 500, 400, False, False, 95.0)
+    assert fields(mrc.Settings.from_env()) == (0.5, 8.0, False, 40.0, False, 500, 400, False, False, 95.0, 25)
 
 
 @pytest.mark.parametrize("halftone", [False, True])
 def test_hinterlegte_textbloecke_sind_kein_foto(tmp_path, rng, halftone):
     path = write_scan_pdf(tmp_path / "versicherung.pdf", [insurance_page(rng, halftone)])
     with pymupdf.open(path) as doc:
-        assert mrc.paper_percent(doc[0]) < 50  # alte Papierflächen-Erkennung hätte es für ein Foto gehalten
-        assert mrc.flat_percent(doc[0]) > 80
+        assert mrc.paper_percent(doc[0]) < 50  # wenig Papierfläche: Texterkennung entscheidet
     size_before = path.stat().st_size
     mrc.process(path, SETTINGS)
     assert path.stat().st_size < size_before / 3
@@ -315,5 +315,29 @@ def test_zeitmessung(tmp_path, rng, capsys):
     path = write_scan_pdf(tmp_path / "zeit.pdf", [letter_page(rng)])
     mrc.process(path, settings(timing=True))
     out = capsys.readouterr().out
-    assert "Seite 1: Zeit Metadaten" in out and "MRC" in out
+    assert "Seite 1: Zeit Rendern" in out and "OCR" in out and "MRC" in out
     assert "zeit.pdf: Zeit Erkennung" in out and "Prüfung" in out
+
+
+def test_kontrastreiches_foto_ohne_text_bleibt(tmp_path, rng, capsys):
+    # Kanten und Strukturen wie in einem Foto: genug „Tinte“, wenig Papier → Texterkennung entscheidet
+    img = photo_page(rng)
+    d = ImageDraw.Draw(img)
+    for _ in range(60):
+        x, y = rng.integers(0, img.width - 200), rng.integers(0, img.height - 200)
+        d.ellipse((x, y, x + rng.integers(40, 200), y + rng.integers(40, 200)),
+                  fill=tuple(int(v) for v in rng.integers(0, 255, 3)))
+    path = write_scan_pdf(tmp_path / "nur_foto.pdf", [img])
+    before = path.read_bytes()
+    mrc.process(path, SETTINGS)
+    assert path.read_bytes() == before
+    out = capsys.readouterr().out
+    assert "sicher erkannte Wörter" in out and "1 Foto" in out
+
+
+def test_sichere_woerter_im_hocr():
+    hocr = ("<span class='ocrx_word' id='w1' title='bbox 1 1 2 2; x_wconf 91'>Vertrag</span>"
+            "<span class='ocrx_word' id='w2' title='bbox 1 1 2 2; x_wconf 30'>Xq</span>"
+            "<span class='ocrx_word' id='w3' title='bbox 1 1 2 2; x_wconf 88'><strong>2026</strong></span>"
+            "<span class='ocrx_word' id='w4' title='bbox 1 1 2 2; x_wconf 95'>a.</span>")
+    assert mrc.confident_words(hocr) == 2

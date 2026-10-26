@@ -28,11 +28,11 @@ Die Maske war dabei CCITT-komprimiert; mit jbig2enc werden die Dateien noch etwa
    Nur diese Seiten werden neu kodiert. Andere Seiten (z. B. ein angehängtes digitales Anschreiben), Lesezeichen und
    Metadaten bleiben unverändert. Rein digitale PDFs, digital signierte PDFs und direkt hochgeladene Bilder
    (JPEG, PNG …) bleiben ganz unverändert.
-   - **Fotos** (z. B. Schadensfotos) lässt das Skript unverändert, weil MRC sie sichtbar verschlechtert. Erkannt werden
-     sie daran, dass sie sich nicht mit wenigen einheitlichen Farben darstellen lassen. Dokumente bestehen dagegen aus
-     Papier, Schrift und Farbflächen – auch grau oder farbig hinterlegte Textblöcke (z. B. Versicherungsscheine) und
-     Druckraster gelten als Dokument. Seiten fast ohne Kontrast, die aber kein Papier sind (z. B. Foto einer Wand),
-     bleiben ebenfalls unverändert und werden nie als leer entfernt.
+   - **Fotos** (z. B. Schadensfotos) lässt das Skript unverändert, weil MRC sie sichtbar verschlechtert. Seiten mit
+     überwiegend Papierfläche gelten als Dokument. Bei allen anderen – Fotos, aber auch grau oder farbig hinterlegte
+     Textblöcke wie in Versicherungsscheinen – entscheidet die Texterkennung: Nur mit genug sicher erkannten Wörtern ist
+     es ein Dokument. Seiten fast ohne Kontrast, die kein Papier sind (z. B. Foto einer Wand), bleiben unverändert und
+     werden nie als leer entfernt.
    - **Vektorisierte Scans** (manche Scanprogramme speichern Seiten als Tausende Vektorelemente ohne Text) werden
      mit 300 dpi gerastert, komprimiert und per Tesseract durchsuchbar gemacht.
 2. **Leere Seiten entfernen:** nur wirklich leere gescannte Seiten. Papierton, Rauschen und durchscheinende Rückseiten zählen nicht
@@ -103,7 +103,8 @@ Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt
 | `MRC_BG_COMPRESSION_RATE` | `200` | JPEG2000-Kompressionsrate des Hintergrunds; höher = kleiner, aber Farbflächen und hellgraue Schrift leiden |
 | `MRC_FIT_A4` | `true` | Offensichtlich falsche Seitengrößen (z. B. 72-ppi-Handyscans) auf A4 skalieren |
 | `MRC_SKIP_PHOTOS` | `true` | Fotoseiten unverändert lassen |
-| `MRC_PHOTO_FLAT_PERCENT` | `60` | Seite gilt als Foto unter diesem Flächenanteil in %, der sich mit 8 einheitlichen Farben darstellen lässt (Testseiten: Dokumente 84–98 %, auch mit farbig hinterlegten Blöcken; Fotos 11–25 %) |
+| `MRC_PHOTO_PAPER_PERCENT` | `50` | Seiten mit weniger Papierfläche in % werden per Texterkennung geprüft (gemessen: Dokumente auf weißem Papier 61–98 %, Fotos 11–43 %, farbig hinterlegte Versicherungsseiten darunter) |
+| `MRC_PHOTO_MIN_WORDS` | `10` | … und gelten unter so vielen sicher erkannten Wörtern (Konfidenz ≥ 60, ≥ 3 Zeichen) als Foto |
 | `MRC_BLANK_PAPER_PERCENT` | `90` | Leer kann eine Seite nur sein, wenn mindestens dieser Flächenanteil in % Papierton ist (schützt kontrastarme Fotos) |
 | `MRC_VECTOR_PAGES` | `true` | Vektorisierte Scans rastern und komprimieren |
 | `MRC_VECTOR_MIN_ITEMS` | `1000` | Seite ohne Bild und Text gilt ab so vielen Vektorelementen als vektorisierter Scan |
