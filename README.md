@@ -28,11 +28,16 @@ Die Maske war dabei CCITT-komprimiert; mit jbig2enc werden die Dateien noch etwa
    Nur diese Seiten werden neu kodiert. Andere Seiten (z. B. ein angehängtes digitales Anschreiben), Lesezeichen und
    Metadaten bleiben unverändert. Rein digitale PDFs, digital signierte PDFs und direkt hochgeladene Bilder
    (JPEG, PNG …) bleiben ganz unverändert.
+   - **Fotos** (z. B. Schadensfotos) erkennt das Skript am geringen Anteil an Papierfläche und lässt sie unverändert,
+     weil MRC sie sichtbar verschlechtert.
+   - **Vektorisierte Scans** (manche Scanprogramme speichern Seiten als Tausende Vektorelemente ohne Text) werden
+     mit 300 dpi gerastert, komprimiert und per Tesseract durchsuchbar gemacht.
 2. **Leere Seiten entfernen:** nur wirklich leere gescannte Seiten. Papierton, Rauschen und durchscheinende Rückseiten zählen nicht
    als Inhalt; eine Seite mit nur einer Seitenzahl bleibt erhalten.
 3. **Seiten rendern** in nativer Auflösung, einschließlich darübergelegter Grafiken (z. B. Markierungen).
 4. **Textebene:** Eine vorhandene Textebene (z. B. von der iOS-Scanfunktion) wird übernommen. Sonst erkennt Tesseract den Text,
-   vorher werden Seiten bei Bedarf gedreht und begradigt.
+   vorher werden Seiten bei Bedarf gedreht und begradigt. Ist die Schräglage nicht eindeutig (Messwert am Rand des
+   Suchbereichs, z. B. bei Seiten ohne Textzeilen), wird nicht begradigt.
 5. **MRC-Kodierung** je Seite (Hintergrund halbe Auflösung, JPEG2000), offensichtlich falsche Seitengrößen
    (z. B. 61 × 86 cm bei Handyscans) werden auf A4 korrigiert.
 6. **Prüfung:** Seitenzahl, Vollständigkeit der übernommenen Textebene und des Texts digitaler Seiten, fehlerfreie Darstellung mit Poppler, kleinere Datei.
@@ -94,6 +99,18 @@ Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt
 | `MRC_BG_DOWNSAMPLE` | `2` | Hintergrund in 1/n der Scan-Auflösung (Text und Linien bleiben in voller Auflösung) |
 | `MRC_BG_COMPRESSION_RATE` | `200` | JPEG2000-Kompressionsrate des Hintergrunds; höher = kleiner, aber Farbflächen und hellgraue Schrift leiden |
 | `MRC_FIT_A4` | `true` | Offensichtlich falsche Seitengrößen (z. B. 72-ppi-Handyscans) auf A4 skalieren |
+| `MRC_SKIP_PHOTOS` | `true` | Fotoseiten unverändert lassen |
+| `MRC_PHOTO_PAPER_PERCENT` | `50` | Seite gilt als Foto unter diesem Anteil Papierfläche in % (gemessen: Dokumentseiten 61–98 %, Fotos 11–43 %). Gilt auch für die Leerseitenprüfung: nur papierartige Seiten können leer sein |
+| `MRC_VECTOR_PAGES` | `true` | Vektorisierte Scans rastern und komprimieren |
+| `MRC_VECTOR_MIN_ITEMS` | `1000` | Seite ohne Bild und Text gilt ab so vielen Vektorelementen als vektorisierter Scan |
+| `MRC_VECTOR_DPI` | `300` | Rasterauflösung für vektorisierte Scans |
+| `MRC_DESKEW_MIN_ANGLE` | `0.2` | Kleinere Schräglagen (in Grad) werden nicht korrigiert |
+| `MRC_DESKEW_MAX_ANGLE` | `5` | Gesuchter Bereich ± in Grad; ein Ergebnis am Rand gilt als unklar und wird nicht korrigiert |
+| `MRC_MIXED_PDFS` | `true` | PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert); `false`: nur reine Scan-PDFs |
+| `MRC_KEEP_TEXT_LAYER` | `true` | Vorhandene Textebene übernehmen; `false`: immer neu mit Tesseract erkennen (dann auch drehen/begradigen) |
+
+Bewusst **nicht** abschaltbar: digital signierte PDFs bleiben unverändert (sonst wird die Signatur ungültig), und die
+Datei wird nur ersetzt, wenn die Prüfung bestanden ist und das Ergebnis kleiner ist.
 
 ## Einschränkungen
 

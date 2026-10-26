@@ -4,7 +4,7 @@ from pathlib import Path
 import pikepdf
 import pymupdf
 import pytest
-from conftest import blank_back, letter_page, page_number_only, write_scan_pdf
+from conftest import add_vector_scan_page, blank_back, letter_page, page_number_only, photo_page, write_scan_pdf
 from PIL import Image
 
 from paperless_mrc import main as mrc
@@ -56,6 +56,7 @@ def test_nur_wirklich_leere_seiten_werden_entfernt(tmp_path, rng):
     path = write_scan_pdf(tmp_path / "leer.pdf", [letter_page(rng), blank_back(rng), page_number_only(rng)])
     with pymupdf.open(path) as doc:
         inks = [mrc.ink_percent(p) for p in doc]
+        assert mrc.paper_percent(doc[1]) > 90
     assert inks[1] < mrc.BLANK_INK_PERCENT <= inks[2], inks
     mrc.process(path, SETTINGS)
     assert page_count(path) == 2
@@ -198,3 +199,89 @@ def test_echte_scans(tmp_path):
         mrc.process(path, SETTINGS)
         assert path.stat().st_size < src.stat().st_size / 3, src.name
         assert len(text_of(path).split()) >= 0.95 * words_before, src.name
+
+
+def settings(**changes) -> mrc.Settings:
+    return mrc.Settings(language="deu", deskew=True, rotate=True, rotate_threshold=12.0, **changes)
+
+
+def image_sizes(page: pymupdf.Page) -> list[tuple[int, int]]:
+    return sorted((w, h) for _, _, w, h, *_ in page.get_images())
+
+
+def test_fotoseite_bleibt_unveraendert(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "foto.pdf", [letter_page(rng), photo_page(rng)])
+    with pymupdf.open(path) as doc:
+        assert mrc.paper_percent(doc[0]) > 80 and mrc.paper_percent(doc[1]) < 30
+        photo_before = image_sizes(doc[1])
+    mrc.process(path, SETTINGS)
+    with pymupdf.open(path) as doc:
+        assert doc.page_count == 2
+        assert len(doc[0].get_images()) > 1  # MRC-Ebenen
+        assert image_sizes(doc[1]) == photo_before  # Foto unverändert
+
+
+def test_fotoerkennung_abschaltbar(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "foto_mrc.pdf", [letter_page(rng), photo_page(rng)])
+    mrc.process(path, settings(skip_photos=False))
+    with pymupdf.open(path) as doc:
+        assert doc.page_count == 2  # weiches Foto hat kaum „Tinte“, darf aber nicht als leer gelten
+        assert len(doc[1].get_images()) > 1
+
+
+def test_vektorisierter_scan_wird_gerastert_und_erkannt(tmp_path, rng):
+    path = tmp_path / "vektor.pdf"
+    with pymupdf.open() as doc:
+        add_vector_scan_page(doc, letter_page(rng))
+        doc.save(path, expand=255)  # unkomprimiert, wie die echten vektorisierten Scans (~1 MB/Seite)
+    with pymupdf.open(path) as doc:
+        assert mrc.is_vector_page(doc[0], 1000) and not doc[0].get_text().strip()
+    mrc.process(path, settings(vector_dpi=200))
+    with pymupdf.open(path) as doc:
+        assert doc[0].get_images() and not doc[0].get_cdrawings()
+    assert "Jahresabrechnung" in text_of(path)
+
+
+def test_vektorseiten_abschaltbar(tmp_path, rng):
+    path = tmp_path / "vektor_bleibt.pdf"
+    with pymupdf.open() as doc:
+        add_vector_scan_page(doc, letter_page(rng))
+        doc.save(path)
+    before = path.read_bytes()
+    mrc.process(path, settings(vector_pages=False))
+    assert path.read_bytes() == before
+
+
+def test_schraeglage_ohne_zeilen_ist_unklar(rng):
+    assert mrc.skew_angle(blank_back(rng).convert("L").point(lambda v: 245)) is None
+
+
+def test_gemischte_pdfs_abschaltbar(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "gemischt_bleibt.pdf", [letter_page(rng)])
+    with pymupdf.open(path) as doc:
+        doc.new_page().insert_text((72, 72), "Digitaler Anhang", fontsize=12)
+        doc.saveIncr()
+    before = path.read_bytes()
+    mrc.process(path, settings(mixed_pdfs=False))
+    assert path.read_bytes() == before
+
+
+def test_textebene_neu_erkennen(tmp_path, rng):
+    path = write_scan_pdf(tmp_path / "neu.pdf", [letter_page(rng)], invisible_text=["Zauberwort4711"])
+    mrc.process(path, settings(keep_text_layer=False))
+    text = text_of(path)
+    assert "Zauberwort4711" not in text and "Jahresabrechnung" in text
+
+
+def test_neue_einstellungen_aus_umgebung(monkeypatch):
+    names = ("MRC_DESKEW_MIN_ANGLE", "MRC_DESKEW_MAX_ANGLE", "MRC_SKIP_PHOTOS", "MRC_PHOTO_PAPER_PERCENT",
+             "MRC_VECTOR_PAGES", "MRC_VECTOR_MIN_ITEMS", "MRC_VECTOR_DPI", "MRC_MIXED_PDFS", "MRC_KEEP_TEXT_LAYER")
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    s = mrc.Settings.from_env()
+    fields = lambda s: (s.deskew_min, s.deskew_max, s.skip_photos, s.photo_paper_percent, s.vector_pages,
+                        s.vector_min_items, s.vector_dpi, s.mixed_pdfs, s.keep_text_layer)
+    assert fields(s) == (0.2, 5.0, True, 50.0, True, 1000, 300, True, True)
+    for name, value in zip(names, ("0.5", "8", "false", "40", "no", "500", "400", "0", "false")):
+        monkeypatch.setenv(name, value)
+    assert fields(mrc.Settings.from_env()) == (0.5, 8.0, False, 40.0, False, 500, 400, False, False)

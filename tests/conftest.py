@@ -55,6 +55,30 @@ def blank_back(rng: np.random.Generator) -> Image.Image:
     return Image.fromarray(np.clip(img - ink[..., None] * 12, 0, 255).astype(np.uint8))
 
 
+def photo_page(rng: np.random.Generator) -> Image.Image:
+    """Fotoähnliche Seite: weiche Farbverläufe und Zwischentöne über die ganze Fläche."""
+    y, x = np.mgrid[0:A4_PX[1], 0:A4_PX[0]].astype(np.float32)
+    r = 120 + 70 * np.sin(x / 150) * np.cos(y / 210)
+    g = 110 + 60 * np.cos(x / 260 + y / 330)
+    b = 90 + 50 * np.sin(y / 120)
+    img = np.stack([r, g, b], axis=2) + rng.normal(0, 6, (A4_PX[1], A4_PX[0], 1))
+    return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
+
+
+def add_vector_scan_page(doc: pymupdf.Document, img: Image.Image) -> None:
+    """Hängt eine Seite an, die das Bild als viele kleine Rechtecke enthält (vektorisierter Scan)."""
+    page = doc.new_page(width=A4_PT[0], height=A4_PT[1])
+    dark = np.asarray(img.convert("L")) < 128
+    f = A4_PT[0] / dark.shape[1]
+    shape = page.new_shape()
+    for row, line in enumerate(dark):
+        edges = np.flatnonzero(np.diff(np.concatenate([[0], line.astype(np.int8), [0]])))
+        for start, stop in zip(edges[::2], edges[1::2]):
+            shape.draw_rect(pymupdf.Rect(start * f, row * f, stop * f, (row + 1) * f))
+            shape.finish(color=None, fill=(0, 0, 0))  # ein Pfad je Element, wie bei Vektorisierern
+    shape.commit()
+
+
 def write_scan_pdf(path, images, page_size=A4_PT, invisible_text=None):
     """Jede Seite = ein JPEG-Seitenbild; optional unsichtbare Textebene (render_mode 3)."""
     doc = pymupdf.open()

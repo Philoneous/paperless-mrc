@@ -70,6 +70,15 @@ class Settings:
     bg_downsample: int = 2  # Hintergrund in 1/n der Auflösung
     bg_rate: float = 200.0  # JPEG2000-Kompressionsrate des Hintergrunds (opj_compress -r)
     fit_a4: bool = True
+    deskew_min: float = MIN_SKEW_DEG  # kleinere Schräglagen werden nicht korrigiert
+    deskew_max: float = 5.0  # gesuchter Bereich ±; Ergebnis am Rand gilt als unklar → nicht drehen
+    skip_photos: bool = True  # Fotoseiten unverändert lassen
+    photo_paper_percent: float = 50.0  # Seite gilt als Foto unter diesem Anteil Papierfläche in %
+    vector_pages: bool = True  # in Vektorgrafik umgewandelte Scans rastern und komprimieren
+    vector_min_items: int = 1000  # ab so vielen Vektorelementen (ohne Bild und Text) gilt eine Seite als solcher Scan
+    vector_dpi: int = 300  # Rasterauflösung für diese Seiten
+    mixed_pdfs: bool = True  # PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert)
+    keep_text_layer: bool = True  # vorhandene Textebene übernehmen statt neu erkennen
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -86,6 +95,15 @@ class Settings:
             bg_downsample=max(int(os.environ.get("MRC_BG_DOWNSAMPLE", "2")), 1),
             bg_rate=max(float(os.environ.get("MRC_BG_COMPRESSION_RATE", "200")), 1.0),
             fit_a4=_env_bool("MRC_FIT_A4", True),
+            deskew_min=max(float(os.environ.get("MRC_DESKEW_MIN_ANGLE", MIN_SKEW_DEG)), 0.0),
+            deskew_max=min(max(float(os.environ.get("MRC_DESKEW_MAX_ANGLE", "5")), 0.5), 45.0),
+            skip_photos=_env_bool("MRC_SKIP_PHOTOS", True),
+            photo_paper_percent=float(os.environ.get("MRC_PHOTO_PAPER_PERCENT", "50")),
+            vector_pages=_env_bool("MRC_VECTOR_PAGES", True),
+            vector_min_items=max(int(os.environ.get("MRC_VECTOR_MIN_ITEMS", "1000")), 1),
+            vector_dpi=min(max(int(os.environ.get("MRC_VECTOR_DPI", "300")), 72), 1200),
+            mixed_pdfs=_env_bool("MRC_MIXED_PDFS", True),
+            keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
         )
 
 
@@ -108,6 +126,16 @@ def is_scan_page(page: pymupdf.Page) -> bool:
     return all(span["type"] == 3 or span.get("opacity", 1) == 0 for span in page.get_texttrace())
 
 
+def is_vector_page(page: pymupdf.Page, min_items: int) -> bool:
+    """Kein Bild, kein sichtbarer Text, aber sehr viele Vektorelemente (Linien, Kurven, Rechtecke): ein beim Scannen
+    vektorisierter Scan (ohne Textebene, groß)."""
+    if page.get_image_info():
+        return False
+    if any(span["type"] != 3 and span.get("opacity", 1) != 0 for span in page.get_texttrace()):
+        return False
+    return sum(len(path["items"]) for path in page.get_cdrawings()) >= min_items
+
+
 def ink_percent(page: pymupdf.Page) -> float:
     """Anteil Pixel, die deutlich dunkler sind als der lokale Papierton (Rand ignoriert)."""
     zoom = 600 / page.rect.width
@@ -119,9 +147,25 @@ def ink_percent(page: pymupdf.Page) -> float:
     return float(ink[m_y:-m_y, m_x:-m_x].mean() * 100)
 
 
-def page_ink_percent(path: Path, index: int) -> float:
+def paper_percent(page: pymupdf.Page) -> float:
+    """Anteil der Fläche in Papierton (hell, ungesättigt) in %. Dokumentseiten liegen
+    bei 60–98 %, Fotos bei 10–45 % (gemessen an echten Scans; 3 % Rand ignoriert)."""
+    zoom = 600 / page.rect.width
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csRGB, alpha=False)
+    a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3).astype(np.int16)
+    m = int(0.03 * pix.width)
+    a = a[m:-m, m:-m]
+    luma = a @ np.array([0.299, 0.587, 0.114])
+    saturation = a.max(axis=2) - a.min(axis=2)
+    paper = np.percentile(luma, 95)
+    return float(((np.abs(luma - paper) < 30) & (saturation < 40)).mean() * 100)
+
+
+def analyse_page(path: Path, index: int, ink: bool, paper: bool) -> tuple[float | None, float | None]:
+    """Tintenanteil und Papieranteil einer Seite (None, wenn nicht angefordert)."""
     with pymupdf.open(path) as doc:
-        return ink_percent(doc[index])
+        page = doc[index]
+        return (ink_percent(page) if ink else None), (paper_percent(page) if paper else None)
 
 
 def pmap(fn, args: list[tuple], jobs: int) -> list:
@@ -149,8 +193,9 @@ def orientation(image_path: Path, threshold: float) -> int:
     return rotate if confidence >= threshold else 0
 
 
-def skew_angle(image: Image.Image) -> float:
-    """Schräglage per Projektionsprofil: Winkel mit der größten Varianz der Zeilensummen."""
+def skew_angle(image: Image.Image, max_angle: float = 5.0) -> float | None:
+    """Schräglage per Projektionsprofil: Winkel mit der größten Varianz der Zeilensummen.
+    None, wenn das Ergebnis am Rand des Suchbereichs liegt (keine erkennbaren Zeilen, z. B. Foto)."""
     small = image.convert("L").resize((800, round(800 * image.height / image.width)))
     a = np.asarray(small, np.float32)
     binary = Image.fromarray(((a < a.mean() - a.std()) * 255).astype(np.uint8))
@@ -158,24 +203,30 @@ def skew_angle(image: Image.Image) -> float:
     def score(angle: float) -> float:
         return float(np.asarray(binary.rotate(angle), np.float32).sum(axis=1).var())
 
-    coarse = max(np.arange(-5, 5.01, 0.5), key=score)
+    coarse = max(np.arange(-max_angle, max_angle + 0.01, 0.5), key=score)
+    if abs(coarse) >= max_angle - 0.01:
+        return None
     return round(float(max(np.arange(coarse - 0.5, coarse + 0.51, 0.1), key=score)), 1)
 
 
 # ----------------------------------------------------------------------------- Verarbeitung
 
 
-def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Seite") -> tuple[Path, bool]:
-    """Kodiert eine einseitige Scan-PDF per MRC. Rückgabe: Ergebnis, Textebene übernommen?"""
+def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Seite",
+                render_dpi: float | None = None) -> tuple[Path, bool]:
+    """Kodiert eine einseitige Scan-PDF per MRC. Rückgabe: Ergebnis, Textebene übernommen?
+    render_dpi: feste Auflösung (Vektorseiten); sonst die des Seitenbilds."""
     meta_file = work / "meta.json"
     meta_file.write_text(run("pdf-metadata-json", page_pdf).stdout)
-    meta = json.loads(meta_file.read_text())["page_data"][0]
-    scale = meta["estimated_scale"]
+    if render_dpi:
+        scale = render_dpi / 72
+    else:
+        scale = json.loads(meta_file.read_text())["page_data"][0]["estimated_scale"]
 
     with pymupdf.open(page_pdf) as doc:
         pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(scale, scale), colorspace=pymupdf.csRGB, alpha=False)
         # meta["has_text_layer"] ist bei jeder Seite mit Bild True, daher selbst prüfen
-        has_text = bool(doc[0].get_text("words"))
+        has_text = settings.keep_text_layer and bool(doc[0].get_text("words"))
     image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
     image_path = work / "page.png"
     dpi = 72 * scale
@@ -191,9 +242,13 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
         if settings.rotate and (rotate := orientation(image_path, settings.rotate_threshold)):
             image = image.rotate(-rotate, expand=True)
             log(f"{label}: um {rotate}° gedreht")
-        if settings.deskew and abs(angle := skew_angle(image)) >= MIN_SKEW_DEG:
-            image = image.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
-            log(f"{label}: Schräglage {angle:+.1f}° korrigiert")
+        if settings.deskew:
+            angle = skew_angle(image, settings.deskew_max)
+            if angle is None:
+                log(f"{label}: Schräglage nicht eindeutig – nicht begradigt")
+            elif abs(angle) >= max(settings.deskew_min, 0.05):
+                image = image.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
+                log(f"{label}: Schräglage {angle:+.1f}° korrigiert")
         save(image)
         hocr = run("tesseract", image_path, "-", "-l", settings.language, "hocr").stdout
 
@@ -246,8 +301,8 @@ def replace_page_content(pdf: pikepdf.Pdf, page: pikepdf.Page, new: pikepdf.Page
             del obj[key]
 
 
-def build(src: Path, encode: list[int], blank: list[int], settings: Settings,
-          work: Path) -> tuple[Path, list[bool]]:
+def build(src: Path, encode: list[int], blank: list[int], settings: Settings, work: Path,
+          vectors: set[int] = frozenset()) -> tuple[Path, list[bool]]:
     """Kodiert die Scan-Seiten neu und setzt sie an ihrer Stelle in die Originaldatei ein.
     Alle anderen Seiten, Lesezeichen und Metadaten bleiben, wie sie sind; leere Seiten entfallen."""
     with pikepdf.open(src) as pdf, contextlib.ExitStack() as parts:
@@ -260,7 +315,8 @@ def build(src: Path, encode: list[int], blank: list[int], settings: Settings,
             single.save(page_dir / "in.pdf")
             page_dirs.append(page_dir)
 
-        args = [(d / "in.pdf", d, settings, f"Seite {index + 1}") for d, index in zip(page_dirs, encode)]
+        args = [(d / "in.pdf", d, settings, f"Seite {index + 1}", settings.vector_dpi if index in vectors else None)
+                for d, index in zip(page_dirs, encode)]
         encoded = pmap(encode_page, args, settings.jobs)
 
         resized = 0
@@ -305,26 +361,40 @@ def process(path: Path, settings: Settings) -> None:
         if doc.get_sigflags() > 0:
             log(f"{path.name}: digital signiert – unverändert, damit die Signatur gültig bleibt")
             return
-        scans = [i for i, page in enumerate(doc) if is_scan_page(page)]
         pages = doc.page_count
-    if not scans:
+        scans = [i for i, page in enumerate(doc) if is_scan_page(page)]
+        vectors = [i for i, page in enumerate(doc) if settings.vector_pages and i not in scans
+                   and is_vector_page(page, settings.vector_min_items)]
+    candidates = sorted(scans + vectors)
+    if not candidates:
         log(f"{path.name}: keine gescannten Seiten – unverändert")
         return
-    blank = []
-    if settings.remove_blank:
-        inks = pmap(page_ink_percent, [(path, i) for i in scans], settings.jobs)
-        blank = [i for i, ink in zip(scans, inks) if ink < settings.blank_ink_percent]
-    encode = [i for i in scans if i not in blank]
+    if not settings.mixed_pdfs and len(candidates) < pages:
+        log(f"{path.name}: enthält nicht gescannte Seiten – unverändert (MRC_MIXED_PDFS aus)")
+        return
+
+    photos, blank = [], []
+    if settings.remove_blank or settings.skip_photos:
+        # Papieranteil auch für die Leerseitenprüfung: ein weiches Foto hat kaum „Tinte“,
+        # ist aber nicht leer
+        args = [(path, i, settings.remove_blank, True) for i in candidates]
+        for i, (ink, paper) in zip(candidates, pmap(analyse_page, args, settings.jobs)):
+            is_paper = paper >= settings.photo_paper_percent
+            if settings.skip_photos and i in scans and not is_paper:
+                photos.append(i)
+            elif ink is not None and ink < settings.blank_ink_percent and is_paper:
+                blank.append(i)
+    encode = [i for i in candidates if i not in photos and i not in blank]
     if not encode:
-        log(f"{path.name}: alle gescannten Seiten leer – unverändert")
+        log(f"{path.name}: keine Seite zu komprimieren ({len(photos)} Foto, {len(blank)} leer) – unverändert")
         return
     keep = [i for i in range(pages) if i not in blank]
-    digital = pages - len(scans)
+    others = pages - len(candidates)
 
     with tempfile.TemporaryDirectory(prefix="paperless-mrc-") as tmp:
         work = Path(tmp)
-        out, text_kept = build(path, encode, blank, settings, work)
-        must_keep_text = {i for i, had in zip(encode, text_kept) if had} | (set(keep) - set(scans))
+        out, text_kept = build(path, encode, blank, settings, work, set(vectors))
+        must_keep_text = {i for i, had in zip(encode, text_kept) if had} | (set(keep) - set(encode))
         verify(path, keep, out, must_keep_text, work)
         size_before, size_after = path.stat().st_size, out.stat().st_size
         if size_after >= size_before:
@@ -335,9 +405,12 @@ def process(path: Path, settings: Settings) -> None:
         os.replace(staged, path)
 
     source = "übernommen" if all(text_kept) else "per Tesseract" if not any(text_kept) else "gemischt"
+    details = [f"{len(blank)} leere entfernt" if blank else "",
+               f"{len(photos)} Foto(s) unverändert" if photos else "",
+               f"{len([i for i in vectors if i in encode])} vektorisierte gerastert" if vectors else "",
+               f"{others} digitale unverändert" if others else ""]
     log(f"{path.name}: {size_before // 1024} KB -> {size_after // 1024} KB, {len(keep)} Seite(n)"
-        f"{f', {len(blank)} leere entfernt' if blank else ''}"
-        f"{f', {digital} digitale unverändert' if digital else ''}, Textebene {source}")
+        + "".join(f", {d}" for d in details if d) + f", Textebene {source}")
 
 
 def main() -> int:
