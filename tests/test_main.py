@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -11,6 +12,12 @@ from PIL import Image, ImageDraw
 from paperless_mrc import main as mrc
 
 SETTINGS = mrc.Settings(language="deu", deskew=True, rotate=True, rotate_threshold=12.0)
+
+
+def results(out: str) -> list[dict]:
+    """Maschinenlesbare Ergebniszeilen aus der Ausgabe."""
+    prefix = "paperless-mrc-result: "
+    return [json.loads(line[len(prefix):]) for line in out.splitlines() if line.startswith(prefix)]
 
 
 def text_of(path: Path) -> str:
@@ -142,7 +149,9 @@ def test_fehler_laesst_datei_unveraendert(tmp_path, rng, monkeypatch, capsys):
     monkeypatch.setenv("DOCUMENT_WORKING_PATH", str(path))
     assert mrc.main() == 0
     assert path.read_bytes() == before
-    assert "bleibt unverändert" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "document left unchanged" in out
+    assert results(out)[0]["status"] == "error" and "simulierter Fehler" in results(out)[0]["message"]
 
 
 def test_mrc_einstellungen_aus_umgebung(monkeypatch):
@@ -281,7 +290,7 @@ def test_begradigungs_konfidenz_aus_umgebung(monkeypatch):
 def test_textarme_seite_bleibt_gerade_im_ablauf(tmp_path, rng, capsys):
     path = write_scan_pdf(tmp_path / "kurz.pdf", [letter_page(rng, lines=["Kurz"])])
     mrc.process(path, SETTINGS)
-    assert "korrigiert" not in capsys.readouterr().out
+    assert "corrected" not in capsys.readouterr().out
 
 
 def test_gemischte_pdfs_abschaltbar(tmp_path, rng):
@@ -342,8 +351,8 @@ def test_zeitmessung(tmp_path, rng, capsys):
     path = write_scan_pdf(tmp_path / "zeit.pdf", [letter_page(rng)])
     mrc.process(path, settings(timing=True))
     out = capsys.readouterr().out
-    assert "Seite 1: Zeit Rendern" in out and "OCR" in out and "MRC" in out
-    assert "zeit.pdf: Zeit Erkennung" in out and "Prüfung" in out
+    assert "Page 1: time render" in out and "OCR" in out and "MRC" in out
+    assert "zeit.pdf: time detection" in out and "verification" in out
 
 
 def test_kontrastreiches_foto_ohne_text_bleibt(tmp_path, rng, capsys):
@@ -359,7 +368,7 @@ def test_kontrastreiches_foto_ohne_text_bleibt(tmp_path, rng, capsys):
     mrc.process(path, SETTINGS)
     assert path.read_bytes() == before
     out = capsys.readouterr().out
-    assert "sicher erkannte Wörter" in out and "1 Foto" in out
+    assert "confidently recognised words" in out and "1 photo" in out
 
 
 def test_sichere_woerter_im_hocr():
@@ -406,3 +415,42 @@ def test_maskenfaktor(tmp_path, rng, monkeypatch):
         path = write_scan_pdf(tmp_path / f"maske{factor}.pdf", [letter_page(rng)])
         mrc.process(path, settings(mask_sensitivity=factor))
         assert "Jahresabrechnung" in text_of(path)
+
+
+def test_ergebniszeile_komprimiert(tmp_path, rng, capsys):
+    path = write_scan_pdf(tmp_path / "ergebnis.pdf", [letter_page(rng), blank_back(rng)])
+    size = path.stat().st_size
+    mrc.process(path, SETTINGS)
+    out = capsys.readouterr().out
+    [r] = results(out)
+    assert r["status"] == "compressed" and r["file"] == "ergebnis.pdf" and r["version"] == 1
+    assert r["size_before"] == size and r["size_after"] == path.stat().st_size
+    assert (r["pages"], r["blank_removed"], r["photos"], r["digital"], r["text_layer"]) == (1, 1, 0, 0, "ocr")
+    assert "ergebnis.pdf: " in out and "1 blank removed, text layer via Tesseract" in out
+
+
+def test_ergebniszeile_unveraendert(tmp_path, capsys):
+    path = tmp_path / "digital.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "Digital")
+    doc.save(path)
+    mrc.process(path, SETTINGS)
+    out = capsys.readouterr().out
+    assert results(out) == [{"version": 1, "file": "digital.pdf", "status": "unchanged", "reason": "no_scanned_pages"}]
+    assert "digital.pdf: no scanned pages – unchanged" in out
+
+
+def test_meldungen_deutsch(tmp_path, rng, capsys, monkeypatch):
+    monkeypatch.setenv("MRC_LANGUAGE", "de")
+    path = write_scan_pdf(tmp_path / "deutsch.pdf", [letter_page(rng), blank_back(rng)])
+    mrc.process(path, SETTINGS)
+    out = capsys.readouterr().out
+    assert "1 Seite(n), 1 leere entfernt, Textebene per Tesseract" in out
+    assert results(out)[0]["text_layer"] == "ocr"  # Ergebniszeile bleibt sprachunabhängig
+
+
+def test_alle_meldungen_in_beiden_sprachen():
+    import string
+    for key, (en, de) in mrc.MESSAGES.items():
+        fields = lambda text: {f for _, f, _, _ in string.Formatter().parse(text) if f}
+        assert fields(en) == fields(de), key

@@ -50,6 +50,71 @@ def log(message: str) -> None:
     print(f"paperless-mrc: {message}", flush=True)
 
 
+# Meldungen: Englisch (Standard) und Deutsch (MRC_LANGUAGE=de)
+MESSAGES = {
+    "not_pdf": ("{name}: not a PDF – unchanged", "{name}: keine PDF – unverändert"),
+    "signed": ("{name}: digitally signed – unchanged so the signature stays valid",
+               "{name}: digital signiert – unverändert, damit die Signatur gültig bleibt"),
+    "no_scanned_pages": ("{name}: no scanned pages – unchanged", "{name}: keine gescannten Seiten – unverändert"),
+    "mixed_disabled": ("{name}: contains non-scanned pages – unchanged (MRC_MIXED_PDFS off)",
+                       "{name}: enthält nicht gescannte Seiten – unverändert (MRC_MIXED_PDFS aus)"),
+    "nothing_to_compress": ("{name}: no page to compress ({photos} photo, {blank} blank) – unchanged",
+                            "{name}: keine Seite zu komprimieren ({photos} Foto, {blank} leer) – unverändert"),
+    "not_smaller": ("{name}: result not smaller ({size_after} KB) – unchanged",
+                    "{name}: Ergebnis nicht kleiner ({size_after} KB) – unverändert"),
+    "compressed": ("{name}: {size_before} KB -> {size_after} KB, {pages} page(s){details}, text layer {source}",
+                   "{name}: {size_before} KB -> {size_after} KB, {pages} Seite(n){details}, Textebene {source}"),
+    "detail_blank": ("{n} blank removed", "{n} leere entfernt"),
+    "detail_photos": ("{n} photo(s) unchanged", "{n} Foto(s) unverändert"),
+    "detail_vectors": ("{n} vectorised rasterised", "{n} vektorisierte gerastert"),
+    "detail_digital": ("{n} digital unchanged", "{n} digitale unverändert"),
+    "source_kept": ("kept", "übernommen"),
+    "source_ocr": ("via Tesseract", "per Tesseract"),
+    "source_mixed": ("mixed", "gemischt"),
+    "page": ("Page {n}", "Seite {n}"),
+    "photo_text_layer": ("{label}: photo (little text in text layer) – unchanged",
+                         "{label}: Foto (kaum Text in der Textebene) – unverändert"),
+    "photo_words": ("{label}: photo ({n} confidently recognised words) – unchanged",
+                    "{label}: Foto ({n} sicher erkannte Wörter) – unverändert"),
+    "rotated": ("{label}: rotated by {degrees}°", "{label}: um {degrees}° gedreht"),
+    "skew_unclear": ("{label}: skew unclear – not straightened", "{label}: Schräglage nicht eindeutig – nicht begradigt"),
+    "deskewed": ("{label}: skew {angle:+.1f}° corrected", "{label}: Schräglage {angle:+.1f}° korrigiert"),
+    "resized": ("{n} page(s) with wrong page size scaled to A4", "{n} Seite(n) mit falscher Seitengröße auf A4 skaliert"),
+    "page_count": ("page count {got} instead of {expected}", "Seitenzahl {got} statt {expected}"),
+    "text_incomplete": ("page {n}: text incomplete ({after}/{before} words)",
+                        "Seite {n}: Text unvollständig ({after}/{before} Wörter)"),
+    "poppler_failed": ("rendering check with Poppler failed: {error}",
+                       "Darstellungsprüfung mit Poppler fehlgeschlagen: {error}"),
+    "no_working_path": ("DOCUMENT_WORKING_PATH is not set – nothing to do",
+                        "DOCUMENT_WORKING_PATH ist nicht gesetzt – nichts zu tun"),
+    "error": ("error, document left unchanged: {error}", "Fehler, Dokument bleibt unverändert: {error}"),
+    "time": ("{label}: time {clock}", "{label}: Zeit {clock}"),
+    "lap_render": ("render", "Rendern"),
+    "lap_text_layer": ("text layer", "Textebene"),
+    "lap_orientation": ("orientation", "Ausrichtung"),
+    "lap_deskew": ("deskew", "Begradigen"),
+    "lap_detect": ("detection", "Erkennung"),
+    "lap_analyse": ("page analysis", "Seitenanalyse"),
+    "lap_encode": ("encoding ({n} p., {jobs} parallel)", "Kodieren ({n} S., {jobs} parallel)"),
+    "lap_verify": ("verification", "Prüfung"),
+    "total": ("total", "gesamt"),
+}
+
+
+def t(key: str, **values) -> str:
+    """Meldung in der Sprache aus MRC_LANGUAGE (en, de; Standard en)."""
+    german = os.environ.get("MRC_LANGUAGE", "en").strip().lower().startswith("de")
+    return MESSAGES[key][1 if german else 0].format(**values)
+
+
+def report(name: str, status: str, reason: str, **data) -> None:
+    """Maschinenlesbare Ergebniszeile (eine je Dokument, unabhängig von MRC_LANGUAGE), z. B. für die Mac-App.
+    status: compressed | unchanged | error; reason: compressed, not_pdf, signed, no_scanned_pages,
+    mixed_disabled, nothing_to_compress, not_smaller, error."""
+    line = json.dumps({"version": 1, "file": name, "status": status, "reason": reason, **data}, ensure_ascii=False)
+    print(f"paperless-mrc-result: {line}", flush=True)
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -140,7 +205,7 @@ class Stopwatch:
 
     def __str__(self) -> str:
         parts = ", ".join(f"{name} {seconds:.1f}s" for name, seconds in self.laps)
-        return f"{parts} | gesamt {self.last - self.start:.1f}s"
+        return f"{parts} | {t('total')} {self.last - self.start:.1f}s"
 
 
 def run(*cmd: str | Path) -> subprocess.CompletedProcess:
@@ -283,7 +348,7 @@ def skew_angle(image: Image.Image, max_angle: float = 5.0, min_confidence: float
 # ----------------------------------------------------------------------------- Verarbeitung
 
 
-def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Seite",
+def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Page",
                 render_dpi: float | None = None, photo_check: bool = False) -> tuple[Path | None, bool]:
     """Kodiert eine einseitige Scan-PDF per MRC. Rückgabe: Ergebnis (None = Foto, Seite bleibt),
     Textebene übernommen? render_dpi: feste Auflösung (Vektorseiten); sonst die des Seitenbilds.
@@ -305,37 +370,37 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
     image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
     image_path = work / "page.png"
     dpi = 72 * scale
-    clock.lap("Rendern")
+    clock.lap(t("lap_render"))
 
     def save(img: Image.Image) -> None:
         img.save(image_path, dpi=(dpi, dpi), compress_level=1)  # Zwischendatei: schnell statt klein
 
     if has_text:
         if photo_check and sum(sum(c.isalnum() for c in w) >= 3 for w in words) < settings.photo_min_words:
-            log(f"{label}: Foto (kaum Text in der Textebene) – unverändert")
+            log(t("photo_text_layer", label=label))
             return None, has_text
         hocr = run("pdf-to-hocr", "-f", page_pdf, "-J", meta_file).stdout
         save(image)
-        clock.lap("Textebene")
+        clock.lap(t("lap_text_layer"))
     else:
         save(image)
         if settings.rotate and (rotate := orientation(image_path, settings.rotate_threshold)):
             image = image.rotate(-rotate, expand=True)
-            log(f"{label}: um {rotate}° gedreht")
-        clock.lap("Ausrichtung")
+            log(t("rotated", label=label, degrees=rotate))
+        clock.lap(t("lap_orientation"))
         if settings.deskew:
             angle = skew_angle(image, settings.deskew_max, settings.deskew_confidence)
             if angle is None:
-                log(f"{label}: Schräglage nicht eindeutig – nicht begradigt")
+                log(t("skew_unclear", label=label))
             elif abs(angle) >= max(settings.deskew_min, 0.05):
                 image = image.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
-                log(f"{label}: Schräglage {angle:+.1f}° korrigiert")
+                log(t("deskewed", label=label, angle=angle))
         save(image)
-        clock.lap("Begradigen")
+        clock.lap(t("lap_deskew"))
         hocr = run("tesseract", image_path, "-", "-l", settings.language, "hocr").stdout
         clock.lap("OCR")
         if photo_check and (found := confident_words(hocr)) < settings.photo_min_words:
-            log(f"{label}: Foto ({found} sicher erkannte Wörter) – unverändert")
+            log(t("photo_words", label=label, n=found))
             return None, has_text
 
     if settings.sharpen:
@@ -353,7 +418,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
         "--bg-downsample", str(settings.bg_downsample), f"--bg-compression-flags=-r {settings.bg_rate:g}")
     clock.lap("MRC")
     if settings.timing:
-        log(f"{label}: Zeit {clock} ({image.width}x{image.height} px, {dpi:.0f} dpi)")
+        log(t("time", label=label, clock=clock) + f" ({image.width}x{image.height} px, {dpi:.0f} dpi)")
     return out, has_text
 
 
@@ -410,7 +475,7 @@ def build(src: Path, encode: list[int], blank: list[int], settings: Settings, wo
             single.save(page_dir / "in.pdf")
             page_dirs.append(page_dir)
 
-        args = [(d / "in.pdf", d, settings, f"Seite {index + 1}", settings.vector_dpi if index in vectors else None,
+        args = [(d / "in.pdf", d, settings, t("page", n=index + 1), settings.vector_dpi if index in vectors else None,
                  index in doubtful) for d, index in zip(page_dirs, encode)]
         encoded = pmap(encode_page, args, settings.jobs)
         results = [(path is not None, had_text) for path, had_text in encoded]
@@ -427,7 +492,7 @@ def build(src: Path, encode: list[int], blank: list[int], settings: Settings, wo
             resized += settings.fit_a4 and fit_a4(pdf, page)
             fix_smask_colorspace(page)
         if resized:
-            log(f"{resized} Seite(n) mit falscher Seitengröße auf A4 skaliert")
+            log(t("resized", n=resized))
         for index in sorted(blank, reverse=True):
             del pdf.pages[index]
         out = work / "result.pdf"
@@ -440,27 +505,29 @@ def verify(src: Path, keep: list[int], out: Path, text_checked: set[int], work: 
     text_checked: Seiten (alte Nummern), deren Text erhalten bleiben muss."""
     with pymupdf.open(src) as before, pymupdf.open(out) as after:
         if after.page_count != len(keep):
-            raise RuntimeError(f"Seitenzahl {after.page_count} statt {len(keep)}")
+            raise RuntimeError(t("page_count", got=after.page_count, expected=len(keep)))
         for n, index in enumerate(keep):
             if index not in text_checked:
                 continue
             words_before = len(before[index].get_text("words"))
             words_after = len(after[n].get_text("words"))
             if words_after < 0.95 * words_before:
-                raise RuntimeError(f"Seite {index + 1}: Text unvollständig ({words_after}/{words_before} Wörter)")
+                raise RuntimeError(t("text_incomplete", n=index + 1, after=words_after, before=words_before))
     check = run("pdftoppm", "-r", "10", "-png", out, work / "check")
     if "error" in check.stderr.lower():
-        raise RuntimeError(f"Darstellungsprüfung mit Poppler fehlgeschlagen: {check.stderr.strip()}")
+        raise RuntimeError(t("poppler_failed", error=check.stderr.strip()))
 
 
 def process(path: Path, settings: Settings) -> None:
     if path.suffix.lower() != ".pdf":
-        log(f"{path.name}: keine PDF – unverändert")
+        log(t("not_pdf", name=path.name))
+        report(path.name, "unchanged", "not_pdf")
         return
     clock = Stopwatch()
     with pymupdf.open(path) as doc:
         if doc.get_sigflags() > 0:
-            log(f"{path.name}: digital signiert – unverändert, damit die Signatur gültig bleibt")
+            log(t("signed", name=path.name))
+            report(path.name, "unchanged", "signed")
             return
         pages = doc.page_count
         scans = [i for i, page in enumerate(doc) if is_scan_page(page)]
@@ -468,13 +535,15 @@ def process(path: Path, settings: Settings) -> None:
                    and is_vector_page(page, settings.vector_min_items)]
     candidates = sorted(scans + vectors)
     if not candidates:
-        log(f"{path.name}: keine gescannten Seiten – unverändert")
+        log(t("no_scanned_pages", name=path.name))
+        report(path.name, "unchanged", "no_scanned_pages")
         return
     if not settings.mixed_pdfs and len(candidates) < pages:
-        log(f"{path.name}: enthält nicht gescannte Seiten – unverändert (MRC_MIXED_PDFS aus)")
+        log(t("mixed_disabled", name=path.name))
+        report(path.name, "unchanged", "mixed_disabled")
         return
 
-    clock.lap("Erkennung")
+    clock.lap(t("lap_detect"))
     photos, blank, doubtful = [], [], set()
     if settings.remove_blank or settings.skip_photos:
         # im eigenen Prozess: ~0,1 s je Seite, Prozessstart wäre teurer (live: 2,3 s statt 6,6 s mit 4 Prozessen)
@@ -490,10 +559,11 @@ def process(path: Path, settings: Settings) -> None:
                 elif paper < settings.photo_paper_percent:
                     # farbig hinterlegtes Dokument oder Foto: entscheidet die Texterkennung
                     doubtful.add(i)
-    clock.lap("Seitenanalyse")
+    clock.lap(t("lap_analyse"))
     encode = [i for i in candidates if i not in photos and i not in blank]
     if not encode:
-        log(f"{path.name}: keine Seite zu komprimieren ({len(photos)} Foto, {len(blank)} leer) – unverändert")
+        log(t("nothing_to_compress", name=path.name, photos=len(photos), blank=len(blank)))
+        report(path.name, "unchanged", "nothing_to_compress", photos=len(photos), blank=len(blank))
         return
     keep = [i for i in range(pages) if i not in blank]
     others = pages - len(candidates)
@@ -501,45 +571,51 @@ def process(path: Path, settings: Settings) -> None:
     with tempfile.TemporaryDirectory(prefix="paperless-mrc-") as tmp:
         work = Path(tmp)
         out, results = build(path, encode, blank, settings, work, set(vectors), doubtful)
-        clock.lap(f"Kodieren ({len(encode)} S., {settings.jobs} parallel)")
+        clock.lap(t("lap_encode", n=len(encode), jobs=settings.jobs))
         photos += [i for i, (coded, _) in zip(encode, results) if not coded]
         if out is None:
-            log(f"{path.name}: keine Seite zu komprimieren ({len(photos)} Foto, {len(blank)} leer) – unverändert")
+            log(t("nothing_to_compress", name=path.name, photos=len(photos), blank=len(blank)))
+            report(path.name, "unchanged", "nothing_to_compress", photos=len(photos), blank=len(blank))
             return
         text_kept = [had for coded, had in results if coded]
         coded = [i for i, (c, _) in zip(encode, results) if c]
         must_keep_text = {i for i, (c, had) in zip(encode, results) if c and had} | (set(keep) - set(coded))
         verify(path, keep, out, must_keep_text, work)
-        clock.lap("Prüfung")
+        clock.lap(t("lap_verify"))
         size_before, size_after = path.stat().st_size, out.stat().st_size
         if size_after >= size_before:
-            log(f"{path.name}: Ergebnis nicht kleiner ({size_after // 1024} KB) – unverändert")
+            log(t("not_smaller", name=path.name, size_after=size_after // 1024))
+            report(path.name, "unchanged", "not_smaller", size_before=size_before, size_after=size_after)
             return
         staged = path.with_name(path.name + ".mrc-tmp")
         shutil.copyfile(out, staged)
         os.replace(staged, path)
 
-    source = "übernommen" if all(text_kept) else "per Tesseract" if not any(text_kept) else "gemischt"
-    details = [f"{len(blank)} leere entfernt" if blank else "",
-               f"{len(photos)} Foto(s) unverändert" if photos else "",
-               f"{len([i for i in vectors if i in coded])} vektorisierte gerastert" if vectors else "",
-               f"{others} digitale unverändert" if others else ""]
+    source = "kept" if all(text_kept) else "ocr" if not any(text_kept) else "mixed"
+    vectorised = len([i for i in vectors if i in coded])
+    details = [t("detail_blank", n=len(blank)) if blank else "",
+               t("detail_photos", n=len(photos)) if photos else "",
+               t("detail_vectors", n=vectorised) if vectors else "",
+               t("detail_digital", n=others) if others else ""]
     if settings.timing:
-        log(f"{path.name}: Zeit {clock}")
-    log(f"{path.name}: {size_before // 1024} KB -> {size_after // 1024} KB, {len(keep)} Seite(n)"
-        + "".join(f", {d}" for d in details if d) + f", Textebene {source}")
-
+        log(t("time", label=path.name, clock=clock))
+    log(t("compressed", name=path.name, size_before=size_before // 1024, size_after=size_after // 1024,
+          pages=len(keep), details="".join(f", {d}" for d in details if d), source=t(f"source_{source}")))
+    report(path.name, "compressed", "compressed", size_before=size_before, size_after=size_after, pages=len(keep),
+           blank_removed=len(blank), photos=len(photos), vectorised=vectorised, digital=others, text_layer=source)
 
 def main() -> int:
     working_path = os.environ.get("DOCUMENT_WORKING_PATH")
     if not working_path:
-        log("DOCUMENT_WORKING_PATH ist nicht gesetzt – nichts zu tun")
+        log(t("no_working_path"))
         return 0
     try:
         process(Path(working_path), Settings.from_env())
     except Exception as exc:  # fail-safe: Paperless soll das Original normal verarbeiten
         detail = exc.stderr.strip()[-500:] if isinstance(exc, subprocess.CalledProcessError) else ""
-        log(f"Fehler, Dokument bleibt unverändert: {exc!r} {detail}".strip())
+        error = f"{exc!r} {detail}".strip()
+        log(t("error", error=error))
+        report(Path(working_path).name, "error", "error", message=error)
     return 0
 
 
