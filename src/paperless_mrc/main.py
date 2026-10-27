@@ -74,6 +74,7 @@ class Settings:
     fit_a4: bool = True
     deskew_min: float = MIN_SKEW_DEG  # kleinere Schräglagen werden nicht korrigiert
     deskew_max: float = 5.0  # gesuchter Bereich ±; Ergebnis am Rand gilt als unklar → nicht drehen
+    deskew_confidence: float = 1.3  # bester Winkel muss sich so deutlich abheben (× Median), sonst nicht drehen
     skip_photos: bool = True  # Fotoseiten unverändert lassen
     photo_paper_percent: float = 50.0  # Seiten mit weniger Papierfläche (%) werden per Texterkennung geprüft
     photo_min_words: int = 10  # … und gelten unter so vielen sicher erkannten Wörtern als Foto
@@ -107,6 +108,7 @@ class Settings:
             fit_a4=_env_bool("MRC_FIT_A4", True),
             deskew_min=max(float(os.environ.get("MRC_DESKEW_MIN_ANGLE", MIN_SKEW_DEG)), 0.0),
             deskew_max=min(max(float(os.environ.get("MRC_DESKEW_MAX_ANGLE", "5")), 0.5), 45.0),
+            deskew_confidence=max(float(os.environ.get("MRC_DESKEW_MIN_CONFIDENCE", "1.3")), 1.0),
             skip_photos=_env_bool("MRC_SKIP_PHOTOS", True),
             photo_paper_percent=float(os.environ.get("MRC_PHOTO_PAPER_PERCENT", "50")),
             photo_min_words=max(int(os.environ.get("MRC_PHOTO_MIN_WORDS", "10")), 0),
@@ -251,9 +253,15 @@ def orientation(image_path: Path, threshold: float) -> int:
     return rotate if confidence >= threshold else 0
 
 
-def skew_angle(image: Image.Image, max_angle: float = 5.0) -> float | None:
+def skew_angle(image: Image.Image, max_angle: float = 5.0, min_confidence: float = 1.3) -> float | None:
     """Schräglage per Projektionsprofil: Winkel mit der größten Varianz der Zeilensummen.
-    None, wenn das Ergebnis am Rand des Suchbereichs liegt (keine erkennbaren Zeilen, z. B. Foto)."""
+    None (= unklar, nicht drehen), wenn
+    - das Ergebnis am Rand des Suchbereichs liegt (keine erkennbaren Zeilen, z. B. Foto) oder
+    - sich der beste Winkel kaum abhebt: Varianz am besten Winkel < min_confidence × Median über den Suchbereich.
+      Das passiert, wenn statt Textzeilen Logos, Stempel o. Ä. die Bewertung bestimmen (z. B. ein Wort neben einem
+      Logo: früher +3,3° auf einer geraden Seite). Gemessen: ohne Zeilenstruktur ≤ 1,14, mit ≥ 1,43.
+      Gleiches Prinzip wie Leptonica (pixFindSkew), das erst ab einer Konfidenz von 3 (max/min seiner
+      Bewertungsfunktion) dreht."""
     small = image.convert("L").resize((800, round(800 * image.height / image.width)))
     a = np.asarray(small, np.float32)
     binary = Image.fromarray(((a < a.mean() - a.std()) * 255).astype(np.uint8))
@@ -261,8 +269,13 @@ def skew_angle(image: Image.Image, max_angle: float = 5.0) -> float | None:
     def score(angle: float) -> float:
         return float(np.asarray(binary.rotate(angle), np.float32).sum(axis=1).var())
 
-    coarse = max(np.arange(-max_angle, max_angle + 0.01, 0.5), key=score)
+    angles = np.arange(-max_angle, max_angle + 0.01, 0.5)
+    scores = [score(angle) for angle in angles]
+    best = int(np.argmax(scores))
+    coarse = float(angles[best])
     if abs(coarse) >= max_angle - 0.01:
+        return None
+    if scores[best] < min_confidence * float(np.median(scores)):
         return None
     return round(float(max(np.arange(coarse - 0.5, coarse + 0.51, 0.1), key=score)), 1)
 
@@ -311,7 +324,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Se
             log(f"{label}: um {rotate}° gedreht")
         clock.lap("Ausrichtung")
         if settings.deskew:
-            angle = skew_angle(image, settings.deskew_max)
+            angle = skew_angle(image, settings.deskew_max, settings.deskew_confidence)
             if angle is None:
                 log(f"{label}: Schräglage nicht eindeutig – nicht begradigt")
             elif abs(angle) >= max(settings.deskew_min, 0.05):

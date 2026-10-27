@@ -4,8 +4,8 @@ from pathlib import Path
 import pikepdf
 import pymupdf
 import pytest
-from conftest import (add_vector_scan_page, blank_back, insurance_page, letter_page, page_number_only, photo_page,
-                      wall_photo, write_scan_pdf)
+from conftest import (LETTER, add_vector_scan_page, blank_back, insurance_page, letter_page, page_number_only,
+                      photo_page, wall_photo, write_scan_pdf)
 from PIL import Image, ImageDraw
 
 from paperless_mrc import main as mrc
@@ -255,6 +255,33 @@ def test_vektorseiten_abschaltbar(tmp_path, rng):
 
 def test_schraeglage_ohne_zeilen_ist_unklar(rng):
     assert mrc.skew_angle(blank_back(rng).convert("L").point(lambda v: 245)) is None
+
+
+@pytest.mark.parametrize("lines", [["Kurz"], ["Seite 3 von 3"]])
+def test_textarme_gerade_seite_wird_nicht_gekippt(rng, lines):
+    # Bei einem Wort neben dem Logo bestimmt das Logo die Bewertung; früher ergab das +3,3°.
+    img = letter_page(rng, lines=lines)
+    angle = mrc.skew_angle(img)
+    assert angle is None or abs(angle) < mrc.MIN_SKEW_DEG, angle
+
+
+@pytest.mark.parametrize("lines, degrees", [(LETTER[:2], 2.0), (LETTER[1:2], 1.0), (LETTER, 4.0)])
+def test_schraege_zeilen_werden_weiter_erkannt(rng, lines, degrees):
+    img = letter_page(rng, lines=lines).rotate(degrees, resample=Image.BICUBIC, fillcolor=(248, 246, 240))
+    assert abs(mrc.skew_angle(img) + degrees) <= 0.2
+
+
+def test_begradigungs_konfidenz_aus_umgebung(monkeypatch):
+    monkeypatch.delenv("MRC_DESKEW_MIN_CONFIDENCE", raising=False)
+    assert mrc.Settings.from_env().deskew_confidence == 1.3
+    monkeypatch.setenv("MRC_DESKEW_MIN_CONFIDENCE", "1.6")
+    assert mrc.Settings.from_env().deskew_confidence == 1.6
+
+
+def test_textarme_seite_bleibt_gerade_im_ablauf(tmp_path, rng, capsys):
+    path = write_scan_pdf(tmp_path / "kurz.pdf", [letter_page(rng, lines=["Kurz"])])
+    mrc.process(path, SETTINGS)
+    assert "korrigiert" not in capsys.readouterr().out
 
 
 def test_gemischte_pdfs_abschaltbar(tmp_path, rng):

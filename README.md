@@ -111,6 +111,7 @@ Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt
 | `MRC_VECTOR_DPI` | `300` | Rasterauflösung für vektorisierte Scans |
 | `MRC_DESKEW_MIN_ANGLE` | `0.2` | Kleinere Schräglagen (in Grad) werden nicht korrigiert |
 | `MRC_DESKEW_MAX_ANGLE` | `5` | Gesuchter Bereich ± in Grad; ein Ergebnis am Rand gilt als unklar und wird nicht korrigiert |
+| `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | Nur begradigen, wenn sich der beste Winkel deutlich abhebt (Bewertung ≥ Faktor × Median über den Suchbereich). Verhindert, dass Logos oder Stempel auf textarmen Seiten eine gerade Seite schief drehen |
 | `MRC_MIXED_PDFS` | `true` | PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert); `false`: nur reine Scan-PDFs |
 | `MRC_KEEP_TEXT_LAYER` | `true` | Vorhandene Textebene übernehmen; `false`: immer neu mit Tesseract erkennen (dann auch drehen/begradigen) |
 | `MRC_JOBS` | – | Seiten, die gleichzeitig verarbeitet werden; überschreibt `PAPERLESS_THREADS_PER_WORKER` (sonst Kerne ÷ `PAPERLESS_TASK_WORKERS`) |
