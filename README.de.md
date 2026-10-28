@@ -118,6 +118,7 @@ Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt
 | `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | Nur begradigen, wenn sich der beste Winkel deutlich abhebt (Bewertung ≥ Faktor × Median über den Suchbereich). Verhindert, dass Logos oder Stempel auf textarmen Seiten eine gerade Seite schief drehen |
 | `MRC_MIXED_PDFS` | `true` | PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert); `false`: nur reine Scan-PDFs |
 | `MRC_KEEP_TEXT_LAYER` | `true` | Vorhandene Textebene übernehmen; `false`: immer neu mit Tesseract erkennen (dann auch drehen/begradigen) |
+| `MRC_ROTATE_CHECK` | `true` | Ist sich die Ausrichtungserkennung unsicher (unter `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD`), schlägt aber eine Drehung vor: Texterkennung in beiden Lagen, gedreht wird nur bei mindestens 1,5-mal so vielen (und mindestens 10) sicher erkannten Wörtern – z. B. hochkant gescannte Querformat-Formulare |
 | `MRC_JOBS` | – | Seiten, die gleichzeitig verarbeitet werden; überschreibt `PAPERLESS_THREADS_PER_WORKER` (sonst Kerne ÷ `PAPERLESS_TASK_WORKERS`) |
 | `MRC_SHARPEN` | `150` | Nachschärfen vor der Kodierung in % (Unscharfmaskierung); hellgraue, dünne Schrift landet sonst teils im verkleinerten Hintergrund und wirkt unscharf. `0` = aus |
 | `MRC_SHARPEN_RADIUS` | `1.5` | Radius des Nachschärfens in Pixeln bei 200 dpi (wird mit der Auflösung skaliert) |

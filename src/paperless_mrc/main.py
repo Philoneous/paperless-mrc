@@ -30,6 +30,7 @@ import sys
 import multiprocessing
 import tempfile
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +78,10 @@ MESSAGES = {
     "photo_words": ("{label}: photo ({n} confidently recognised words) – unchanged",
                     "{label}: Foto ({n} sicher erkannte Wörter) – unverändert"),
     "rotated": ("{label}: rotated by {degrees}°", "{label}: um {degrees}° gedreht"),
+    "rotate_checked": ("{label}: orientation uncertain (confidence {confidence:.1f}) – text recognition: {kept} words "
+                       "upright, {turned} rotated by {degrees}°",
+                       "{label}: Ausrichtung unsicher (Sicherheit {confidence:.1f}) – Texterkennung: {kept} Wörter "
+                       "ungedreht, {turned} um {degrees}° gedreht"),
     "skew_unclear": ("{label}: skew unclear – not straightened", "{label}: Schräglage nicht eindeutig – nicht begradigt"),
     "deskewed": ("{label}: skew {angle:+.1f}° corrected", "{label}: Schräglage {angle:+.1f}° korrigiert"),
     "resized": ("{n} page(s) with wrong page size scaled to A4", "{n} Seite(n) mit falscher Seitengröße auf A4 skaliert"),
@@ -149,6 +154,7 @@ class Settings:
     vector_dpi: int = 300  # Rasterauflösung für diese Seiten
     mixed_pdfs: bool = True  # PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert)
     keep_text_layer: bool = True  # vorhandene Textebene übernehmen statt neu erkennen
+    rotate_check: bool = True  # unsichere Drehung per Texterkennung in beiden Lagen entscheiden
     sharpen: int = 150  # Nachschärfen vor der Kodierung in % (Unscharfmaskierung); 0 = aus
     sharpen_radius: float = 1.5  # Radius in Pixeln bei 200 dpi (skaliert mit der Auflösung)
     mask_sensitivity: float = 0.5  # Faktor auf die Schwellen der Textmaske; kleiner = mehr Schrift scharf, 1 = recode_pdf-Standard
@@ -183,6 +189,7 @@ class Settings:
             vector_dpi=min(max(int(os.environ.get("MRC_VECTOR_DPI", "300")), 72), 1200),
             mixed_pdfs=_env_bool("MRC_MIXED_PDFS", True),
             keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
+            rotate_check=_env_bool("MRC_ROTATE_CHECK", True),
             max_dpi=max(int(os.environ.get("MRC_MAX_DPI", "0")), 0),
             sharpen=max(int(os.environ.get("MRC_SHARPEN", "150")), 0),
             mask_sensitivity=min(max(float(os.environ.get("MRC_MASK_FACTOR", "0.5")), 0.1), 2.0),
@@ -306,16 +313,37 @@ def pmap(fn, args: list[tuple], jobs: int) -> list:
 # ----------------------------------------------------------------------------- OCR-Hilfen
 
 
-def orientation(image_path: Path, threshold: float) -> int:
-    """Nötige Drehung laut Tesseract-OSD (0, 90, 180, 270); 0 bei zu geringer Sicherheit."""
+def orientation(image_path: Path) -> tuple[int, float]:
+    """Nötige Drehung laut Tesseract-OSD (0, 90, 180, 270) und deren Sicherheit."""
     try:
         out = run("tesseract", image_path, "-", "--psm", "0").stdout
     except subprocess.CalledProcessError:
-        return 0  # z. B. zu wenig Text für eine Erkennung
+        return 0, 0.0  # z. B. zu wenig Text für eine Erkennung
     values = dict(line.split(":", 1) for line in out.splitlines() if ":" in line)
-    rotate = int(values.get("Rotate", "0").strip())
-    confidence = float(values.get("Orientation confidence", "0").strip())
-    return rotate if confidence >= threshold else 0
+    return int(values.get("Rotate", "0").strip()), float(values.get("Orientation confidence", "0").strip())
+
+
+# Unsichere Drehung: gedrehte Lage gewinnt nur mit deutlich mehr sicher erkannten Wörtern. Gemessen an einem hochkant
+# gescannten Querformat-Formular (kleine Schrift, Tabellen, Wasserzeichen; OSD-Sicherheit 1,6 bzw. 4,1):
+# 82 → 432 und 89 → 420 sichere Wörter.
+ROTATE_CHECK_FACTOR = 1.5
+ROTATE_CHECK_MIN_WORDS = 10
+
+
+def decide_rotation(rotate: int, confidence: float, threshold: float, check: bool,
+                    count: Callable[[int], int]) -> tuple[int, int | None, int | None]:
+    """Drehung für eine Seite: OSD bei ausreichender Sicherheit; sonst (falls check) entscheidet die Texterkennung
+    in beiden Lagen – count(Grad) liefert die sicher erkannten Wörter. Rückgabe: (Drehung, Wörter ungedreht,
+    Wörter gedreht); die Wortzahlen nur, wenn verglichen wurde."""
+    if not rotate:
+        return 0, None, None
+    if confidence >= threshold:
+        return rotate, None, None
+    if not check:
+        return 0, None, None
+    kept, turned = count(0), count(rotate)
+    better = turned >= max(ROTATE_CHECK_MIN_WORDS, ROTATE_CHECK_FACTOR * kept)
+    return (rotate if better else 0), kept, turned
 
 
 def skew_angle(image: Image.Image, max_angle: float = 5.0, min_confidence: float = 1.3) -> float | None:
@@ -384,9 +412,23 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
         clock.lap(t("lap_text_layer"))
     else:
         save(image)
-        if settings.rotate and (rotate := orientation(image_path, settings.rotate_threshold)):
-            image = image.rotate(-rotate, expand=True)
-            log(t("rotated", label=label, degrees=rotate))
+        if settings.rotate:
+            suggested, confidence = orientation(image_path)
+
+            def count(degrees: int) -> int:
+                candidate = work / f"orientation-{degrees}.png"
+                (image.rotate(-degrees, expand=True) if degrees else image).save(
+                    candidate, dpi=(dpi, dpi), compress_level=1)
+                return confident_words(run("tesseract", candidate, "-", "-l", settings.language, "hocr").stdout)
+
+            rotate, kept, turned = decide_rotation(suggested, confidence, settings.rotate_threshold,
+                                                   settings.rotate_check, count)
+            if kept is not None:
+                log(t("rotate_checked", label=label, confidence=confidence, kept=kept, turned=turned,
+                      degrees=suggested))
+            if rotate:
+                image = image.rotate(-rotate, expand=True)
+                log(t("rotated", label=label, degrees=rotate))
         clock.lap(t("lap_orientation"))
         if settings.deskew:
             angle = skew_angle(image, settings.deskew_max, settings.deskew_confidence)

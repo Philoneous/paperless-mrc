@@ -132,6 +132,7 @@ Own settings (optional, also in `paperless.conf`; without an entry the default a
 | `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | Only deskew if the best angle clearly stands out (score ≥ factor × median over the search range). Prevents logos or stamps on text-poor pages from tilting a straight page |
 | `MRC_MIXED_PDFS` | `true` | Process PDFs with non-scanned pages (these pages stay unchanged); `false`: only pure scan PDFs |
 | `MRC_KEEP_TEXT_LAYER` | `true` | Keep an existing text layer; `false`: always recognise again with Tesseract (then also rotate/deskew) |
+| `MRC_ROTATE_CHECK` | `true` | If the orientation detection is unsure (below `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD`) but suggests a rotation, run text recognition in both orientations and rotate only if that gives at least 1.5× as many (and at least 10) confidently recognised words – e.g. landscape forms scanned in portrait |
 | `MRC_JOBS` | – | Pages processed at the same time; overrides `PAPERLESS_THREADS_PER_WORKER` (otherwise cores ÷ `PAPERLESS_TASK_WORKERS`) |
 | `MRC_SHARPEN` | `150` | Sharpening before encoding in % (unsharp mask); light-grey thin text otherwise partly ends up in the downsampled background and looks blurry. `0` = off |
 | `MRC_SHARPEN_RADIUS` | `1.5` | Sharpening radius in pixels at 200 dpi (scaled with the resolution) |

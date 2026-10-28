@@ -454,3 +454,29 @@ def test_alle_meldungen_in_beiden_sprachen():
     for key, (en, de) in mrc.MESSAGES.items():
         fields = lambda text: {f for _, f, _, _ in string.Formatter().parse(text) if f}
         assert fields(en) == fields(de), key
+
+
+def test_decide_rotation_uncertain_page_is_checked_by_text_recognition():
+    """Hochkant gescanntes Querformat: OSD unsicher (1,6 < 12), Texterkennung entscheidet (gemessen 82 vs. 432)."""
+    counts = {0: 82, 90: 432}
+    assert mrc.decide_rotation(90, 1.6, 12.0, True, counts.__getitem__) == (90, 82, 432)
+    # aufrechte Seite mit unsicherem OSD-Vorschlag bleibt
+    counts = {0: 300, 90: 40}
+    assert mrc.decide_rotation(90, 2.0, 12.0, True, counts.__getitem__) == (0, 300, 40)
+    # zu wenig Text für eine Entscheidung: nicht drehen
+    counts = {0: 0, 270: 5}
+    assert mrc.decide_rotation(270, 1.0, 12.0, True, counts.__getitem__)[0] == 0
+
+
+def test_decide_rotation_without_check_or_with_confident_osd():
+    never = lambda degrees: (_ for _ in ()).throw(AssertionError("keine Texterkennung erwartet"))
+    assert mrc.decide_rotation(90, 15.0, 12.0, True, never) == (90, None, None)
+    assert mrc.decide_rotation(90, 3.0, 12.0, False, never) == (0, None, None)
+    assert mrc.decide_rotation(0, 3.0, 12.0, True, never) == (0, None, None)
+
+
+def test_rotation_check_env(monkeypatch):
+    monkeypatch.setenv("MRC_ROTATE_CHECK", "false")
+    assert mrc.Settings.from_env().rotate_check is False
+    monkeypatch.delenv("MRC_ROTATE_CHECK")
+    assert mrc.Settings.from_env().rotate_check is True
