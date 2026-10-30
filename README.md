@@ -133,6 +133,7 @@ Own settings (optional, also in `paperless.conf`; without an entry the default a
 | `MRC_MIXED_PDFS` | `true` | Process PDFs with non-scanned pages (these pages stay unchanged); `false`: only pure scan PDFs |
 | `MRC_KEEP_TEXT_LAYER` | `true` | Keep an existing text layer; `false`: always recognise again with Tesseract (then also rotate/deskew) |
 | `MRC_ROTATE_CHECK` | `true` | If the orientation detection is unsure (below `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD`) but suggests a rotation, run text recognition in both orientations and rotate only if that gives at least 1.5× as many (and at least 10) confidently recognised words – e.g. landscape forms scanned in portrait |
+| `MRC_POPPLER_CHECK` | `true` | Also render the result with Poppler (`pdftoppm`, as Paperless reads it) and discard it on errors; `false`: skip (e.g. when another renderer checks it) |
 | `MRC_JOBS` | – | Pages processed at the same time; overrides `PAPERLESS_THREADS_PER_WORKER` (otherwise cores ÷ `PAPERLESS_TASK_WORKERS`) |
 | `MRC_SHARPEN` | `150` | Sharpening before encoding in % (unsharp mask); light-grey thin text otherwise partly ends up in the downsampled background and looks blurry. `0` = off |
 | `MRC_SHARPEN_RADIUS` | `1.5` | Sharpening radius in pixels at 200 dpi (scaled with the resolution) |
@@ -161,9 +162,16 @@ uv run pytest                                   # synthetic test cases
 PAPERLESS_MRC_TESTFILES=/path/to/scans uv run pytest -k echte   # optional: your own scans
 ```
 
-Requires `tesseract` (with `deu`), `opj_compress` (libopenjp2-tools) and `pdftoppm` (poppler-utils).
+Requires `tesseract` (with `deu`), `opj_compress` (libopenjp2-tools) and `pdftoppm` (poppler-utils; not needed with `MRC_POPPLER_CHECK=false`).
 
-## Licence
+## License
 
-GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`), see [LICENSE](LICENSE) – matching the
-AGPL-licensed dependencies PyMuPDF and archive-pdf-tools.
+Copyright (C) 2026 Philoneous. GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`), see
+[LICENSE](LICENSE) – matching the AGPL-licensed dependencies PyMuPDF and archive-pdf-tools.
+
+The MRC encoding is done by [archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools) and
+[archive-hocr-tools](https://github.com/internetarchive/archive-hocr-tools) by the Internet Archive (AGPL-3.0), PDF
+handling by [PyMuPDF](https://github.com/pymupdf/PyMuPDF)/MuPDF by Artifex (AGPL-3.0) and
+[pikepdf](https://github.com/pikepdf/pikepdf) (MPL-2.0), text recognition by
+[Tesseract](https://github.com/tesseract-ocr/tesseract) (Apache-2.0). paperless-mrc is an independent project and is not
+affiliated with or endorsed by Paperless-ngx or the Internet Archive.

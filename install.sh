@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # =============================================================================
 #  paperless-mrc im Paperless-ngx-LXC installieren oder aktualisieren
 #  (Layout der community-scripts: /opt/paperless, uv, systemd-Dienste)

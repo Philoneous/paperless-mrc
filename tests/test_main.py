@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import os
 from pathlib import Path
@@ -480,3 +481,23 @@ def test_rotation_check_env(monkeypatch):
     assert mrc.Settings.from_env().rotate_check is False
     monkeypatch.delenv("MRC_ROTATE_CHECK")
     assert mrc.Settings.from_env().rotate_check is True
+
+
+def test_poppler_check_env(monkeypatch):
+    monkeypatch.setenv("MRC_POPPLER_CHECK", "false")
+    assert mrc.Settings.from_env().poppler_check is False
+    monkeypatch.delenv("MRC_POPPLER_CHECK")
+    assert mrc.Settings.from_env().poppler_check is True
+
+
+def test_without_poppler_check_no_pdftoppm_needed(tmp_path, rng, monkeypatch):
+    """Mac-App: Ergebnis ohne Poppler prüfen (pdftoppm fehlt dort)."""
+    calls = []
+    real_run = mrc.run
+    monkeypatch.setattr(mrc, "run", lambda *cmd: calls.append(str(cmd[0])) or real_run(*cmd))
+    path = write_scan_pdf(tmp_path / "scan.pdf", [letter_page(rng)])
+    before = path.stat().st_size
+    mrc.process(path, settings(poppler_check=False))
+    assert "pdftoppm" not in calls
+    assert path.stat().st_size < before / 3  # trotzdem komprimiert
+    assert "Jahresabrechnung" in text_of(path)

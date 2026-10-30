@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Erzeugt synthetische, scannerähnliche Test-PDFs (Papierton, Rauschen, Logo, Text)."""
 
 import io

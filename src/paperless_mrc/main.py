@@ -160,6 +160,7 @@ class Settings:
     mask_sensitivity: float = 0.5  # Faktor auf die Schwellen der Textmaske; kleiner = mehr Schrift scharf, 1 = recode_pdf-Standard
     max_dpi: int = 0  # Obergrenze der Auflösung für kodierte Seiten; 0 = aus (Originalauflösung)
     timing: bool = False  # Laufzeiten je Schritt und Seite ausgeben (Analyse/Optimierung)
+    poppler_check: bool = True  # Ergebnis zusätzlich mit Poppler (pdftoppm) rendern – wie Paperless es liest
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -195,6 +196,7 @@ class Settings:
             mask_sensitivity=min(max(float(os.environ.get("MRC_MASK_FACTOR", "0.5")), 0.1), 2.0),
             sharpen_radius=max(float(os.environ.get("MRC_SHARPEN_RADIUS", "1.5")), 0.1),
             timing=_env_bool("MRC_TIMING", False),
+            poppler_check=_env_bool("MRC_POPPLER_CHECK", True),
         )
 
 
@@ -542,7 +544,8 @@ def build(src: Path, encode: list[int], blank: list[int], settings: Settings, wo
     return out, results
 
 
-def verify(src: Path, keep: list[int], out: Path, text_checked: set[int], work: Path) -> None:
+def verify(src: Path, keep: list[int], out: Path, text_checked: set[int], work: Path,
+           poppler_check: bool = True) -> None:
     """Wirft eine Ausnahme, wenn das Ergebnis nicht verwendet werden darf.
     text_checked: Seiten (alte Nummern), deren Text erhalten bleiben muss."""
     with pymupdf.open(src) as before, pymupdf.open(out) as after:
@@ -555,6 +558,8 @@ def verify(src: Path, keep: list[int], out: Path, text_checked: set[int], work: 
             words_after = len(after[n].get_text("words"))
             if words_after < 0.95 * words_before:
                 raise RuntimeError(t("text_incomplete", n=index + 1, after=words_after, before=words_before))
+    if not poppler_check:  # z. B. Mac-App: prüft stattdessen mit dem PDF-Darsteller von macOS
+        return
     check = run("pdftoppm", "-r", "10", "-png", out, work / "check")
     if "error" in check.stderr.lower():
         raise RuntimeError(t("poppler_failed", error=check.stderr.strip()))
@@ -622,7 +627,7 @@ def process(path: Path, settings: Settings) -> None:
         text_kept = [had for coded, had in results if coded]
         coded = [i for i, (c, _) in zip(encode, results) if c]
         must_keep_text = {i for i, (c, had) in zip(encode, results) if c and had} | (set(keep) - set(coded))
-        verify(path, keep, out, must_keep_text, work)
+        verify(path, keep, out, must_keep_text, work, settings.poppler_check)
         clock.lap(t("lap_verify"))
         size_before, size_after = path.stat().st_size, out.stat().st_size
         if size_after >= size_before:

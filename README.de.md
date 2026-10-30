@@ -119,6 +119,7 @@ Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt
 | `MRC_MIXED_PDFS` | `true` | PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert); `false`: nur reine Scan-PDFs |
 | `MRC_KEEP_TEXT_LAYER` | `true` | Vorhandene Textebene übernehmen; `false`: immer neu mit Tesseract erkennen (dann auch drehen/begradigen) |
 | `MRC_ROTATE_CHECK` | `true` | Ist sich die Ausrichtungserkennung unsicher (unter `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD`), schlägt aber eine Drehung vor: Texterkennung in beiden Lagen, gedreht wird nur bei mindestens 1,5-mal so vielen (und mindestens 10) sicher erkannten Wörtern – z. B. hochkant gescannte Querformat-Formulare |
+| `MRC_POPPLER_CHECK` | `true` | Ergebnis zusätzlich mit Poppler rendern (`pdftoppm`, so liest Paperless es) und bei Fehlern verwerfen; `false`: auslassen (z. B. wenn ein anderer Darsteller prüft) |
 | `MRC_JOBS` | – | Seiten, die gleichzeitig verarbeitet werden; überschreibt `PAPERLESS_THREADS_PER_WORKER` (sonst Kerne ÷ `PAPERLESS_TASK_WORKERS`) |
 | `MRC_SHARPEN` | `150` | Nachschärfen vor der Kodierung in % (Unscharfmaskierung); hellgraue, dünne Schrift landet sonst teils im verkleinerten Hintergrund und wirkt unscharf. `0` = aus |
 | `MRC_SHARPEN_RADIUS` | `1.5` | Radius des Nachschärfens in Pixeln bei 200 dpi (wird mit der Auflösung skaliert) |
@@ -148,9 +149,16 @@ uv run pytest                                   # synthetische Testfälle
 PAPERLESS_MRC_TESTFILES=/pfad/zu/scans uv run pytest -k echte   # optional: eigene Scans
 ```
 
-Benötigt `tesseract` (mit `deu`), `opj_compress` (libopenjp2-tools) und `pdftoppm` (poppler-utils).
+Benötigt `tesseract` (mit `deu`), `opj_compress` (libopenjp2-tools) und `pdftoppm` (poppler-utils; mit `MRC_POPPLER_CHECK=false` nicht nötig).
 
 ## Lizenz
 
-GNU Affero General Public License v3.0 oder später (`AGPL-3.0-or-later`), siehe [LICENSE](LICENSE) –
-passend zu den AGPL-lizenzierten Abhängigkeiten PyMuPDF und archive-pdf-tools.
+Copyright (C) 2026 Philoneous. GNU Affero General Public License v3.0 oder später (`AGPL-3.0-or-later`), siehe
+[LICENSE](LICENSE) – passend zu den AGPL-lizenzierten Abhängigkeiten PyMuPDF und archive-pdf-tools.
+
+Die MRC-Kodierung übernehmen [archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools) und
+[archive-hocr-tools](https://github.com/internetarchive/archive-hocr-tools) des Internet Archive (AGPL-3.0), die
+PDF-Verarbeitung [PyMuPDF](https://github.com/pymupdf/PyMuPDF)/MuPDF von Artifex (AGPL-3.0) und
+[pikepdf](https://github.com/pikepdf/pikepdf) (MPL-2.0), die Texterkennung
+[Tesseract](https://github.com/tesseract-ocr/tesseract) (Apache-2.0). paperless-mrc ist ein unabhängiges Projekt und
+weder mit Paperless-ngx noch mit dem Internet Archive verbunden oder von ihnen unterstützt.
