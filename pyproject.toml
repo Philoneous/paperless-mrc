@@ -16,6 +16,8 @@ dependencies = [
 
 [project.scripts]
 paperless-mrc = "paperless_mrc.main:main"
+paperless-mrc-post = "paperless_mrc.originals:post_consume"
+paperless-mrc-cleanup = "paperless_mrc.originals:cleanup_main"
 
 [dependency-groups]
 dev = ["pytest"]

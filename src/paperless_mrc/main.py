@@ -94,6 +94,29 @@ MESSAGES = {
                         "DOCUMENT_WORKING_PATH ist nicht gesetzt – nichts zu tun"),
     "error": ("error, document left unchanged: {error}", "Fehler, Dokument bleibt unverändert: {error}"),
     "time": ("{label}: time {clock}", "{label}: Zeit {clock}"),
+    "own_version": ("{name}: original attached as a version by paperless-mrc – unchanged",
+                    "{name}: von paperless-mrc als Version angehängtes Original – unverändert"),
+    "original_held": ("{name}: original kept until review (MRC_KEEP_ORIGINAL)",
+                      "{name}: Original bis zur Prüfung aufbewahrt (MRC_KEEP_ORIGINAL)"),
+    "original_attached": ("document #{doc}: original attached as version “Original” (deleted after {days} days unless "
+                          "changed in the field “Original (MRC)”)",
+                          "Dokument #{doc}: Original als Version „Original“ angehängt (wird nach {days} Tagen gelöscht, "
+                          "sofern im Feld „Original (MRC)“ nicht anders gewählt)"),
+    "original_attach_failed": ("document #{doc}: could not attach the original ({error}); it stays in {folder}",
+                               "Dokument #{doc}: Original konnte nicht angehängt werden ({error}); es bleibt in {folder}"),
+    "original_orphan": ("original {file} was never attached (post-consume script not set up?) – kept",
+                        "Original {file} wurde nie angehängt (Post-Consume-Skript nicht eingerichtet?) – bleibt erhalten"),
+    "original_not_arrived": ("document #{doc}: the original version has not arrived in Paperless yet – {file} is kept",
+                             "Dokument #{doc}: Die Version „Original“ ist noch nicht in Paperless angekommen – {file} "
+                             "bleibt erhalten"),
+    "original_unknown_value": ("document #{doc}: unknown value {value!r} in “Original (MRC)” – nothing deleted",
+                               "Dokument #{doc}: unbekannter Wert {value!r} in „Original (MRC)“ – nichts gelöscht"),
+    "original_deleted": ("document #{doc}: original version deleted", "Dokument #{doc}: Version „Original“ gelöscht"),
+    "cleanup_done": ("cleanup: {deleted} original(s) deleted, {kept} kept, {waiting} waiting, {attached} attached "
+                     "later, {released} held cop(y/ies) released",
+                     "Aufräumen: {deleted} Original(e) gelöscht, {kept} behalten, {waiting} wartend, {attached} "
+                     "nachträglich angehängt, {released} abgelegte Kopie(n) freigegeben"),
+    "cleanup_failed": ("cleanup failed: {error}", "Aufräumen fehlgeschlagen: {error}"),
     "invalid_setting": ("{name}={value!r} is not a number – using the default {default}",
                         "{name}={value!r} ist keine Zahl – Standard {default} wird verwendet"),
     "lap_render": ("render", "Rendern"),
@@ -142,6 +165,7 @@ RANGES: dict[str, tuple[float, float]] = {
     "MRC_SHARPEN": (0, 300),
     "MRC_SHARPEN_RADIUS": (0.5, 5),
     "MRC_MASK_FACTOR": (0.1, 1),
+    "MRC_KEEP_ORIGINAL_DAYS": (1, 3650),
 }
 
 
@@ -201,6 +225,7 @@ class Settings:
     max_dpi: int = 0  # Obergrenze der Auflösung für kodierte Seiten; 0 = aus (Originalauflösung)
     timing: bool = False  # Laufzeiten je Schritt und Seite ausgeben (Analyse/Optimierung)
     poppler_check: bool = True  # Ergebnis zusätzlich mit Poppler (pdftoppm) rendern – wie Paperless es liest
+    keep_original: bool = False  # Original bis zur Prüfung als Version aufbewahren (originals.py)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -237,6 +262,7 @@ class Settings:
             sharpen_radius=_env_num("MRC_SHARPEN_RADIUS", 1.5),
             timing=_env_bool("MRC_TIMING", False),
             poppler_check=_env_bool("MRC_POPPLER_CHECK", True),
+            keep_original=_env_bool("MRC_KEEP_ORIGINAL", False),
         )
 
 
@@ -610,6 +636,11 @@ def process(path: Path, settings: Settings) -> None:
         log(t("not_pdf", name=path.name))
         report(path.name, "unchanged", "not_pdf")
         return
+    from paperless_mrc import originals
+    if originals.is_own_upload(path):  # auch bei inzwischen abgeschalteter Option: nie das Original komprimieren
+        log(t("own_version", name=path.name))
+        report(path.name, "unchanged", "original_version")
+        return
     clock = Stopwatch()
     with pymupdf.open(path) as doc:
         if doc.get_sigflags() > 0:
@@ -674,6 +705,10 @@ def process(path: Path, settings: Settings) -> None:
             log(t("not_smaller", name=path.name, size_after=size_after // 1024))
             report(path.name, "unchanged", "not_smaller", size_before=size_before, size_after=size_after)
             return
+        if settings.keep_original:
+            from paperless_mrc import originals
+            originals.hold(path, os.environ.get("TASK_ID", ""))  # wirft bei Fehlern: Datei bleibt unverändert
+            log(t("original_held", name=path.name))
         staged = path.with_name(path.name + ".mrc-tmp")
         shutil.copyfile(out, staged)
         os.replace(staged, path)

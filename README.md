@@ -84,6 +84,47 @@ The installer
 **Update:** run the same command again. **Uninstall:** remove the line `PAPERLESS_PRE_CONSUME_SCRIPT=…` from
 `paperless.conf` and restart both services.
 
+## Optional: keep the original until you have checked it
+
+Normally the compressed file replaces the original. If you would rather check the result first, paperless-mrc can keep
+the original as a second **version** of the document (Paperless-ngx 3 or later) and delete it later:
+
+- The compressed file becomes the document; the original is attached as the version *Original*. In the document
+  view you can switch between both versions and compare them.
+- A select field **Original (MRC)** decides what happens to the original:
+
+  | Choice | Effect |
+  |---|---|
+  | **Delete after 30 days** (default) | The original is deleted automatically after the period (`MRC_KEEP_ORIGINAL_DAYS`) |
+  | **Keep** | The original stays permanently – e.g. if the compressed version is not good enough |
+  | **Delete now** | The original is deleted within the hour – typically after you have checked the document |
+
+- After deletion only the small compressed file remains and the field disappears, so filtering the document list by
+  *Original (MRC)* shows exactly the documents that still have an original (handy as a saved view for reviewing).
+- An hourly timer (`paperless-mrc-cleanup`) does the deleting. It only deletes in clear cases; an unknown value, or a
+  field of the same name that paperless-mrc did not create, leaves everything as it is.
+
+**Switch on** (run as root in the container; the setting is off by default):
+
+```bash
+KEEP_ORIGINAL=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Philoneous/paperless-mrc/main/install.sh)"
+```
+
+Then create an API token in Paperless under *My Profile*, add it to `/opt/paperless/paperless.conf` as
+`MRC_API_TOKEN=<token>` and restart `paperless-task-queue` and `paperless-consumer`. The installer sets up the
+post-consume script, the folder `/opt/paperless-mrc/originals` and the timer; it stops if a different post-consume
+script is already configured. **Switch off:** run the command with `KEEP_ORIGINAL=0` (or set `MRC_KEEP_ORIGINAL=false`
+and restart both services) – new documents then replace the original as before, and the timer still handles the
+originals that are already there.
+
+Good to know:
+- Until it is deleted, the original takes up as much space as before. If the original has no text layer, Paperless
+  also runs its own text recognition on that version, which costs some server time.
+- Paperless moves deleted versions to its trash; the space is freed when the trash is emptied (after 30 days by
+  default, `PAPERLESS_EMPTY_TRASH_DELAY`).
+- If the original cannot be put aside, the file is not compressed at all – an original is never lost. If attaching it
+  fails (e.g. the token is missing), it stays in `/opt/paperless-mrc/originals` and the timer attaches it later.
+
 ## Configuration
 
 Without any configuration the defaults apply; they were chosen for the best readability of the result. paperless-mrc
@@ -136,6 +177,12 @@ number) is replaced by the default and reported in the log.
 | `MRC_POPPLER_CHECK` | `true` | | Also render the result with Poppler (`pdftoppm`) and discard it on errors |
 | `MRC_LANGUAGE` | `en` | | Language of the log messages: `en` or `de` |
 | `MRC_TIMING` | `false` | | Log the time each step takes per page |
+| **Keep the original (optional)** | | | |
+| `MRC_KEEP_ORIGINAL` | `false` | | Keep the original as a version until you have checked it (see above) |
+| `MRC_KEEP_ORIGINAL_DAYS` | `30` | 1–3650 | Default period after which the original is deleted |
+| `MRC_API_TOKEN` | – | | Paperless API token (from *My Profile*), needed to attach and delete versions |
+| `MRC_API_URL` | `http://localhost:8000` | | Address of the Paperless API from inside the container (port from `PAPERLESS_PORT`) |
+| `MRC_ORIGINALS_DIR` | `/opt/paperless-mrc/originals` | | Where originals wait until they are attached |
 
 Deliberately **not** configurable: digitally signed PDFs stay unchanged (the signature would become invalid), and the
 original is only replaced if the result passed verification and is smaller.
@@ -158,10 +205,11 @@ paperless-mrc-result: {"version": 1, "file": "scan.pdf", "status": "compressed",
 
 ## Good to know
 
-- **The compression is lossy:** the original is replaced; afterwards only the compressed version exists. Keep the
-  originals elsewhere if you need them unaltered.
+- **The compression is lossy:** by default the original is replaced and afterwards only the compressed version
+  exists. To check first, switch on [keeping the original](#optional-keep-the-original-until-you-have-checked-it).
 - **Duplicate detection:** Paperless compares the checksum of an incoming file with the stored one. Since the stored
-  file is the compressed one, uploading the identical original again is no longer recognized as a duplicate.
+  file is the compressed one, uploading the identical original again is no longer recognized as a duplicate (it is
+  while the original is kept as a version).
 - **"Reprocess"** in Paperless does not run paperless-mrc again (the file is already compressed).
 - Annotations (comments, highlights) on scanned pages are burned into the image and can no longer be edited.
 - Pages with an existing text layer are not rotated or straightened, because the text layer would no longer match.

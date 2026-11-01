@@ -7,6 +7,7 @@
 #  Aufruf als root im Paperless-Container:
 #    bash install.sh
 #  Erneuter Aufruf = Update (git pull + Neuinstallation).
+#  KEEP_ORIGINAL=1 bash install.sh: zusätzlich Original bis zur Prüfung aufbewahren (KEEP_ORIGINAL=0: aus).
 # =============================================================================
 set -Eeuo pipefail
 
@@ -59,6 +60,61 @@ if [[ -z "$current" ]] || ! grep -qE '^\s*PAPERLESS_OCR_LANGUAGE=' "$CONF"; then
   grep -qE '^\s*PAPERLESS_OCR_LANGUAGE=' "$CONF" || printf 'PAPERLESS_OCR_LANGUAGE=%s\n' "$OCR_LANGUAGE" >> "$CONF"
   ok "$CONF ergänzt (Sicherung daneben abgelegt)"
 fi
+
+# ---- Optional: Original bis zur Prüfung aufbewahren -------------------------------------------
+# KEEP_ORIGINAL=1: einschalten (Post-Consume-Skript, Ordner, stündlicher Aufräum-Timer)
+# KEEP_ORIGINAL=0: ausschalten (neue Scans ohne Original; der Timer erledigt vorhandene Originale weiter)
+set_conf() {  # KEY VALUE: Zeile ersetzen oder anhängen
+  if grep -qE "^\s*$1=" "$CONF"; then sed -i -E "s|^\s*$1=.*|$1=$2|" "$CONF"; else printf '%s=%s\n' "$1" "$2" >> "$CONF"; fi
+}
+POST="$INSTALL_DIR/venv/bin/paperless-mrc-post"
+case "${KEEP_ORIGINAL:-}" in
+  1|true|yes)
+    msg "Original bis zur Prüfung aufbewahren einrichten"
+    post_current=$(grep -E '^\s*PAPERLESS_POST_CONSUME_SCRIPT=' "$CONF" | tail -n1 | cut -d= -f2- || true)
+    [[ -z "$post_current" || "$post_current" == "$POST" ]] \
+      || die "In $CONF ist bereits ein anderes Post-Consume-Skript eingetragen: $post_current"
+    run_user="$(systemctl show -p User --value paperless-consumer 2>/dev/null || true)"
+    run_user="${run_user:-root}"
+    install -d -m 700 -o "$run_user" "$INSTALL_DIR/originals"
+    cp -a "$CONF" "$CONF.bak-$(date +%Y%m%d%H%M%S)"
+    set_conf PAPERLESS_POST_CONSUME_SCRIPT "$POST"
+    set_conf MRC_KEEP_ORIGINAL true
+    cat > /etc/systemd/system/paperless-mrc-cleanup.service <<UNIT
+[Unit]
+Description=paperless-mrc: aufbewahrte Originale anhängen und nach Frist löschen
+After=network-online.target paperless-webserver.service
+
+[Service]
+Type=oneshot
+User=$run_user
+Environment=MRC_PAPERLESS_CONF=$CONF
+ExecStart=$INSTALL_DIR/venv/bin/paperless-mrc-cleanup
+UNIT
+    cat > /etc/systemd/system/paperless-mrc-cleanup.timer <<'UNIT'
+[Unit]
+Description=paperless-mrc: aufbewahrte Originale stündlich prüfen
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now paperless-mrc-cleanup.timer >/dev/null
+    ok "Original wird bis zur Prüfung aufbewahrt (Frist: MRC_KEEP_ORIGINAL_DAYS, Standard 30 Tage)"
+    if ! grep -qE '^\s*MRC_API_TOKEN=.+' "$CONF"; then
+      printf '[!!] Noch nötig: In Paperless unter „Mein Profil“ ein API-Token erzeugen und in %s eintragen:\n' "$CONF"
+      printf '     MRC_API_TOKEN=<token>   (danach: systemctl restart paperless-task-queue paperless-consumer)\n'
+    fi
+    ;;
+  0|false|no)
+    set_conf MRC_KEEP_ORIGINAL false
+    ok "Original-Aufbewahrung ausgeschaltet; vorhandene Originale erledigt der Timer weiter"
+    ;;
+esac
 
 # ---- Dienste neu starten ------------------------------------------------------------------
 msg "Paperless-Dienste neu starten"

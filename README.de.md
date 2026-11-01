@@ -86,6 +86,49 @@ Der Installer
 **Aktualisieren:** denselben Befehl erneut ausführen. **Entfernen:** die Zeile `PAPERLESS_PRE_CONSUME_SCRIPT=…` aus
 `paperless.conf` löschen und beide Dienste neu starten.
 
+## Optional: Original bis zur Prüfung aufbewahren
+
+Normalerweise ersetzt die komprimierte Datei das Original. Wer das Ergebnis erst prüfen möchte, kann paperless-mrc das
+Original als zweite **Version** des Dokuments aufbewahren lassen (ab Paperless-ngx 3) und später löschen:
+
+- Die komprimierte Datei wird das Dokument, das Original hängt als Version *Original* daran. In der Dokumentansicht
+  lässt sich zwischen beiden Versionen wechseln und vergleichen.
+- Ein Auswahlfeld **Original (MRC)** legt fest, was mit dem Original passiert:
+
+  | Auswahl | Wirkung |
+  |---|---|
+  | **Löschen nach 30 Tagen** (Standard) | Das Original wird nach der Frist automatisch gelöscht (`MRC_KEEP_ORIGINAL_DAYS`) |
+  | **Behalten** | Das Original bleibt dauerhaft – z. B. wenn die komprimierte Fassung nicht gut genug ist |
+  | **Jetzt löschen** | Das Original wird innerhalb einer Stunde gelöscht – typischerweise nach deiner Prüfung |
+
+- Nach dem Löschen bleibt nur die kleine komprimierte Datei, und das Feld verschwindet. Filtert man die Dokumentliste
+  nach *Original (MRC)*, sieht man also genau die Dokumente, die noch ein Original haben (praktisch als gespeicherte
+  Ansicht zum Prüfen).
+- Das Löschen übernimmt ein stündlicher Timer (`paperless-mrc-cleanup`). Er löscht nur in eindeutigen Fällen; ein
+  unbekannter Wert oder ein gleichnamiges Feld, das nicht von paperless-mrc stammt, lässt alles, wie es ist.
+
+**Einschalten** (als root im Container; standardmäßig ist die Option aus):
+
+```bash
+KEEP_ORIGINAL=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Philoneous/paperless-mrc/main/install.sh)"
+```
+
+Danach in Paperless unter *Mein Profil* ein API-Token erzeugen, als `MRC_API_TOKEN=<token>` in
+`/opt/paperless/paperless.conf` eintragen und `paperless-task-queue` sowie `paperless-consumer` neu starten. Der
+Installer richtet Post-Consume-Skript, den Ordner `/opt/paperless-mrc/originals` und den Timer ein; ist schon ein anderes
+Post-Consume-Skript eingetragen, bricht er ab. **Ausschalten:** den Befehl mit `KEEP_ORIGINAL=0` ausführen (oder
+`MRC_KEEP_ORIGINAL=false` setzen und beide Dienste neu starten) – neue Dokumente ersetzen dann wieder das Original, und
+der Timer erledigt die schon vorhandenen Originale weiter.
+
+Gut zu wissen:
+- Bis zum Löschen belegt das Original so viel Platz wie bisher. Hat das Original keine Textebene, erkennt Paperless
+  den Text dieser Version außerdem selbst noch einmal, das kostet etwas Rechenzeit auf dem Server.
+- Gelöschte Versionen legt Paperless in den Papierkorb; der Platz wird frei, wenn der Papierkorb geleert wird
+  (standardmäßig nach 30 Tagen, `PAPERLESS_EMPTY_TRASH_DELAY`).
+- Lässt sich das Original nicht zurücklegen, wird die Datei gar nicht komprimiert – ein Original geht nie verloren.
+  Scheitert das Anhängen (z. B. weil das Token fehlt), bleibt es in `/opt/paperless-mrc/originals`, und der Timer hängt
+  es später an.
+
 ## Einstellungen
 
 Ohne Einstellungen gelten die Standardwerte; sie sind auf die beste Lesbarkeit des Ergebnisses ausgelegt. paperless-mrc
@@ -138,6 +181,12 @@ ungültiger Wert (keine Zahl) wird durch den Standard ersetzt und im Log gemelde
 | `MRC_POPPLER_CHECK` | `true` | | Ergebnis zusätzlich mit Poppler (`pdftoppm`) darstellen und bei Fehlern verwerfen |
 | `MRC_LANGUAGE` | `en` | | Sprache der Log-Meldungen: `en` oder `de` |
 | `MRC_TIMING` | `false` | | Dauer jedes Schritts je Seite ins Log schreiben |
+| **Original aufbewahren (optional)** | | | |
+| `MRC_KEEP_ORIGINAL` | `false` | | Original bis zur Prüfung als Version aufbewahren (siehe oben) |
+| `MRC_KEEP_ORIGINAL_DAYS` | `30` | 1–3650 | Standardfrist, nach der das Original gelöscht wird |
+| `MRC_API_TOKEN` | – | | API-Token von Paperless (aus *Mein Profil*), nötig zum Anhängen und Löschen von Versionen |
+| `MRC_API_URL` | `http://localhost:8000` | | Adresse der Paperless-API aus dem Container (Port aus `PAPERLESS_PORT`) |
+| `MRC_ORIGINALS_DIR` | `/opt/paperless-mrc/originals` | | Hier warten Originale, bis sie angehängt sind |
 
 Bewusst **nicht** einstellbar: Digital signierte PDFs bleiben unverändert (die Signatur würde sonst ungültig), und das
 Original wird nur ersetzt, wenn das Ergebnis die Prüfung bestanden hat und kleiner ist.
@@ -160,11 +209,12 @@ paperless-mrc-result: {"version": 1, "file": "scan.pdf", "status": "compressed",
 
 ## Gut zu wissen
 
-- **Die Komprimierung ist verlustbehaftet:** Das Original wird ersetzt; danach gibt es nur noch die komprimierte
-  Fassung. Wer die Originale unverändert braucht, sollte sie zusätzlich anderswo aufbewahren.
+- **Die Komprimierung ist verlustbehaftet:** Standardmäßig wird das Original ersetzt; danach gibt es nur noch die
+  komprimierte Fassung. Wer erst prüfen möchte, schaltet das
+  [Aufbewahren des Originals](#optional-original-bis-zur-prüfung-aufbewahren) ein.
 - **Duplikaterkennung:** Paperless vergleicht die Prüfsumme einer eingehenden Datei mit der gespeicherten. Da die
   komprimierte Fassung gespeichert ist, erkennt Paperless ein erneut hochgeladenes, identisches Original nicht mehr als
-  Duplikat.
+  Duplikat (solange das Original als Version aufbewahrt wird, schon).
 - **„Erneut verarbeiten“** in Paperless führt paperless-mrc nicht erneut aus (die Datei ist bereits komprimiert).
 - Anmerkungen (Kommentare, Markierungen) auf gescannten Seiten werden ins Bild eingebrannt und sind danach nicht mehr
   bearbeitbar.
