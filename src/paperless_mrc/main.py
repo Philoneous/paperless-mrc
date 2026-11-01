@@ -25,6 +25,7 @@ import json
 import re
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import multiprocessing
@@ -314,9 +315,28 @@ class Stopwatch:
         return f"{parts} | {t('total')} {self.last - self.start:.1f}s"
 
 
-def run(*cmd: str | Path) -> subprocess.CompletedProcess:
+# Höchstdauer eines externen Programms (Tesseract, recode_pdf, pdftoppm …) je Seite. Normal: Sekunden bis wenige
+# Minuten; ein hängendes Programm hielte sonst den Paperless-Worker unbegrenzt fest.
+TOOL_TIMEOUT = 1800
+
+
+def run(*cmd: str | Path, timeout: float = TOOL_TIMEOUT) -> subprocess.CompletedProcess:
+    """Externes Programm ausführen; bei Überschreitung von timeout wird es samt allen Unterprozessen beendet
+    (eigene Prozessgruppe – recode_pdf startet z. B. opj_compress und jbig2) und subprocess.TimeoutExpired geworfen."""
     env = {**os.environ, "PATH": f"{TOOLS_DIR}{os.pathsep}{os.environ.get('PATH', '')}"}
-    return subprocess.run([str(c) for c in cmd], check=True, capture_output=True, text=True, env=env)
+    args = [str(c) for c in cmd]
+    with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                          start_new_session=True) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+    if proc.returncode:
+        raise subprocess.CalledProcessError(proc.returncode, args, stdout, stderr)
+    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
 # ----------------------------------------------------------------------------- Erkennung

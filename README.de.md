@@ -76,17 +76,25 @@ Als root im Paperless-Container (bzw. in der VM):
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Philoneous/paperless-mrc/main/install.sh)"
 ```
 
-Der Installer
-- installiert die nötigen Systempakete (OpenJPEG-Werkzeuge, Poppler, Tesseract-Sprachpakete),
-- richtet paperless-mrc in einer eigenen Python-Umgebung unter `/opt/paperless-mrc` ein,
-- trägt `PAPERLESS_PRE_CONSUME_SCRIPT` und – falls noch nicht gesetzt – `PAPERLESS_OCR_LANGUAGE` in
-  `/opt/paperless/paperless.conf` ein (eine Sicherung der Datei liegt daneben),
-- bricht ab, wenn dort schon ein anderes Pre-Consume-Skript eingetragen ist,
-- startet `paperless-task-queue` und `paperless-consumer` neu.
+Der Installer führt durch die Einrichtung:
 
-Der Installer meldet sich auf Englisch; für Deutsch `MRC_LANGUAGE=de` in `paperless.conf` eintragen oder vor den
-Befehl setzen (`MRC_LANGUAGE=de bash -c "…"`). **Aktualisieren:** denselben Befehl erneut ausführen. **Entfernen:** die Zeile `PAPERLESS_PRE_CONSUME_SCRIPT=…` aus
-`paperless.conf` löschen und beide Dienste neu starten.
+1. **Sprache** des Installers und der Meldungen (Englisch oder Deutsch).
+2. **Die wichtigsten Einstellungen** – OCR-Sprachen, leere Seiten entfernen, Fotos unverändert lassen, PDFs mit
+   digitalen Seiten, vorhandene Textebene, Papierformat, Original bis zur Prüfung aufbewahren (mit API-Token, das
+   gleich geprüft wird). Enter übernimmt den Wert in Klammern; die Standardwerte sind auf beste Lesbarkeit ausgelegt.
+3. **Detaileinstellungen** nur auf Wunsch – nach Gruppen (Qualität und Größe, Seitenauswahl, Texterkennung, leere
+   Seiten, Sonstiges), jeweils mit Bereich und Wirkung.
+
+Danach installiert er die Systempakete und OCR-Sprachpakete, richtet paperless-mrc in einer eigenen Python-Umgebung
+unter `/opt/paperless-mrc` ein, schreibt nur die vom Standard abweichenden Einstellungen in
+`/opt/paperless/paperless.conf` (eine Sicherung liegt daneben), trägt das Pre-Consume-Skript ein und startet
+`paperless-task-queue` und `paperless-consumer` neu. Ist schon ein anderes Pre-Consume-Skript eingetragen, bricht er ab.
+
+**Aktualisieren:** denselben Befehl erneut ausführen. Der Installer zeigt die aktuellen Einstellungen und bietet an,
+sie zu übernehmen; dann fragt er nur nach Optionen, die seit der letzten Einrichtung dazugekommen sind (keine → keine
+Fragen). Man kann auch alle Einstellungen noch einmal durchgehen. **Ohne Fragen** (z. B. in Skripten):
+`MRC_YES=1 bash -c "…"` übernimmt die bestehenden Einstellungen. **Entfernen:** die Zeile
+`PAPERLESS_PRE_CONSUME_SCRIPT=…` aus `paperless.conf` löschen und beide Dienste neu starten.
 
 ## Optional: Original bis zur Prüfung aufbewahren
 
@@ -112,16 +120,12 @@ Original als zweite **Version** des Dokuments aufbewahren lassen (ab Paperless-n
 - Das Löschen übernimmt ein stündlicher Timer (`paperless-mrc-cleanup`). Er löscht nur in eindeutigen Fällen; ein
   unbekannter Wert oder ein gleichnamiges Feld, das nicht von paperless-mrc stammt, lässt alles, wie es ist.
 
-**Einschalten** (als root im Container; standardmäßig ist die Option aus):
-
-```bash
-KEEP_ORIGINAL=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Philoneous/paperless-mrc/main/install.sh)"
-```
-
-Danach in Paperless unter *Mein Profil* ein API-Token erzeugen, als `MRC_API_TOKEN=<token>` in
-`/opt/paperless/paperless.conf` eintragen und `paperless-task-queue` sowie `paperless-consumer` neu starten. Der
+**Einschalten:** im Installer mit *ja* antworten und ein API-Token eingeben (in Paperless unter *Mein Profil*
+erzeugen). Standardmäßig ist die Option aus. Ohne Fragen: `KEEP_ORIGINAL=1 MRC_YES=1 bash -c "…"`, danach das Token als
+`MRC_API_TOKEN=<token>` in `/opt/paperless/paperless.conf` eintragen und `paperless-task-queue` sowie
+`paperless-consumer` neu starten. Der
 Installer richtet Post-Consume-Skript, den Ordner `/opt/paperless-mrc/originals` und den Timer ein; ist schon ein anderes
-Post-Consume-Skript eingetragen, bricht er ab. **Ausschalten:** den Befehl mit `KEEP_ORIGINAL=0` ausführen (oder
+Post-Consume-Skript eingetragen, bricht er ab. **Ausschalten:** im Installer mit *nein* antworten (oder
 `MRC_KEEP_ORIGINAL=false` setzen und beide Dienste neu starten) – neue Dokumente ersetzen dann wieder das Original, und
 der Timer erledigt die schon vorhandenen Originale weiter.
 
@@ -234,6 +238,10 @@ paperless-mrc ist kostenlos. Wenn es dir Zeit oder Speicherplatz spart, kannst d
 *Sponsor*-Knopf oben auf dieser Seite. Beiträge sind freiwillig und keine steuerlich absetzbaren Spenden.
 
 ## Entwicklung
+
+**Neue Einstellung?** In `src/paperless_mrc/catalog.py` mit `since=REVISION + 1` eintragen und `REVISION` erhöhen.
+Der Installer fragt bestehende Nutzer dann beim nächsten Update danach; `tests/test_catalog.py` schlägt fehl, wenn eine
+im Code gelesene Einstellung im Katalog fehlt oder ihr Standard abweicht.
 
 ```bash
 uv sync

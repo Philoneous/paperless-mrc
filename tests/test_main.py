@@ -576,3 +576,31 @@ def test_verschluesselte_pdf_bleibt_unveraendert(tmp_path, rng):
     before = path.read_bytes()
     mrc.process(path, SETTINGS)
     assert path.read_bytes() == before
+
+
+def test_haengendes_programm_wird_samt_unterprozessen_beendet(tmp_path):
+    """Zeitlimit für externe Programme: auch Enkelprozesse (z. B. von recode_pdf gestartete) werden beendet."""
+    import subprocess
+    import time
+    marker = tmp_path / "enkel.pid"
+    script = f"sleep 300 & echo $! > {marker}; wait"
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        mrc.run("sh", "-c", script, timeout=1)
+    assert time.monotonic() - start < 20
+    grandchild = int(marker.read_text())
+    time.sleep(0.2)
+    stat = Path(f"/proc/{grandchild}/stat")
+    if stat.exists():  # Linux: beendet, aber evtl. noch nicht abgeräumt (Zombie, Zustand „Z“)
+        assert stat.read_text().split(")")[-1].split()[0] == "Z"
+    else:
+        with pytest.raises(ProcessLookupError):
+            os.kill(grandchild, 0)
+
+
+def test_run_meldet_fehler_wie_subprocess(tmp_path):
+    import subprocess
+    with pytest.raises(subprocess.CalledProcessError) as err:
+        mrc.run("sh", "-c", "echo kaputt >&2; exit 3")
+    assert err.value.returncode == 3 and "kaputt" in err.value.stderr
+    assert mrc.run("sh", "-c", "echo ok").stdout == "ok\n"
