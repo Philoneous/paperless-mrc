@@ -48,7 +48,8 @@ Ein normaler Scan speichert jede Seite als ein großes Foto; MRC behält die Det
    - **Vektorisierte Scans** – manche Scanner-Software speichert eine Seite als Tausende Zeichenelemente statt als
      Bild – werden in ein Bild umgewandelt, komprimiert und durchsuchbar gemacht.
 2. **Leere Seiten werden entfernt** – z. B. leere Rückseiten beim beidseitigen Scannen. Papierton, Rauschen und
-   Durchscheinendes zählen nicht als Inhalt; eine Seite mit nur einer Seitenzahl bleibt.
+   Durchscheinendes zählen nicht als Inhalt; eine Seite mit nur einer Seitenzahl bleibt, ebenso blasse Seiten (helles
+   Foto, verblasster Beleg).
 3. **Texterkennung:** Eine vorhandene Textebene (z. B. vom Scanner) bleibt erhalten. Sonst erkennt Tesseract den Text –
    nachdem auf dem Kopf stehende oder quer liegende Seiten gedreht und schiefe Seiten begradigt wurden.
 4. **Komprimierung** jeder Seite mit MRC; unplausible Seitengrößen (z. B. Handyscans, die ein Vielfaches von A4 groß
@@ -161,7 +162,8 @@ ungültiger Wert (keine Zahl) wird durch den Standard ersetzt und im Log gemelde
 | `MRC_BG_DOWNSAMPLE` | `2` | 1–4 | Hintergrund in 1/n der Scan-Auflösung (Schrift bleibt immer in voller Auflösung). 1 = beste Farben und Bilder, größer; 4 = am kleinsten, Farbflächen werden blockig |
 | `MRC_BG_COMPRESSION_RATE` | `200` | 50–800 | JPEG-2000-Kompression des Hintergrunds. 50 = kaum komprimiert; 800 = sehr klein, Farbflächen und Bilder werden fleckig |
 | `MRC_MAX_DPI` | `0` | 0, 150–1200 | Scans oberhalb dieser Auflösung vor dem Komprimieren verkleinern: schneller und kleiner, feinste Details gehen verloren. 0 = aus (Auflösung des Scans bleibt) |
-| `MRC_FIT_A4` | `true` | | Unplausibel große Seitenformate auf A4 skalieren |
+| `MRC_FIT_A4` | `true` | | Unplausibel große Seitenformate (kürzere Seite größer als A3, z. B. 72-ppi-Handyscans) auf das Zielformat verkleinern |
+| `MRC_FIT_PAGE_SIZE` | `a4` | `a4`, `letter`, `legal` | Zielformat dafür (Seitenverhältnis bleibt) |
 | **Seitenauswahl** | | | |
 | `MRC_MIXED_PDFS` | `true` | | Auch PDFs mit digitalen Seiten bearbeiten (diese bleiben unverändert); `false` = nur PDFs, die ganz aus Scans bestehen |
 | `MRC_SKIP_PHOTOS` | `true` | | Fotoseiten unverändert lassen |
@@ -178,7 +180,8 @@ ungültiger Wert (keine Zahl) wird durch den Standard ersetzt und im Log gemelde
 | `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | 1–3 | Nur begradigen, wenn der beste Winkel deutlich heraussticht. 1 = immer (Logos oder Stempel auf textarmen Seiten können eine gerade Seite kippen); 3 = nur Seiten mit vielen klaren Textzeilen |
 | **Leere Seiten** | | | |
 | `MRC_REMOVE_BLANK_PAGES` | `true` | | Leere gescannte Seiten entfernen |
-| `MRC_BLANK_INK_PERCENT` | `0.005` | 0–1 | Eine Seite ist leer unterhalb dieses Tintenanteils in %. 0 = nie entfernen; eine Seite mit nur einer Seitenzahl hat etwa 0,05 % |
+| `MRC_BLANK_INK_PERCENT` | `0.005` | 0–1 | Eine Seite ist leer unterhalb dieses Tintenanteils in %. 0 = nie entfernen; eine Seite mit nur einer Seitenzahl hat etwa 0,01 % |
+| `MRC_BLANK_INK_CONTRAST` | `20` | 10–100 | Für die Leerseitenprüfung zählt ein Pixel als Tinte, wenn er so viele Helligkeitsstufen dunkler ist als das Papier ringsum. Kleiner = schon blasser Inhalt hält eine Seite (10: auch kräftiges Durchscheinen); größer = nur deutliche Zeichen zählen (40 = Verhalten vor 11/2026: blasse Fotos und verblasste Belege wurden entfernt) |
 | `MRC_BLANK_PAPER_PERCENT` | `90` | 0–100 | Eine Seite kann nur leer sein, wenn mindestens dieser Anteil (%) wie Papier aussieht – schützt kontrastarme Fotos (z. B. einer weißen Wand) |
 | **Sonstiges** | | | |
 | `MRC_JOBS` | – | 1–64 | Gleichzeitig verarbeitete Seiten; überschreibt `PAPERLESS_THREADS_PER_WORKER` |

@@ -46,7 +46,8 @@ A normal scan stores every page as one large photo; MRC only keeps the detail wh
    - **Vectorized scans** – some scanner software stores a page as thousands of drawing elements instead of an image –
      are turned into an image, compressed and made searchable.
 2. **Blank pages are removed** – e.g. empty back sides from double-sided scanning. Paper tone, noise and show-through
-   do not count as content; a page with only a page number is kept.
+   do not count as content; a page with only a page number is kept, and so are faint pages (a pale photo, a faded
+   receipt).
 3. **Text recognition:** an existing text layer (e.g. from the scanner) is kept. Otherwise Tesseract recognizes the
    text – after turning upside-down or sideways pages the right way up and straightening skewed pages.
 4. **Compression** of each page with MRC; implausible page sizes (e.g. phone scans stored many times larger than A4)
@@ -157,7 +158,8 @@ number) is replaced by the default and reported in the log.
 | `MRC_BG_DOWNSAMPLE` | `2` | 1–4 | Background at 1/n of the scan resolution (text always stays at full resolution). 1 = best colours and pictures, larger; 4 = smallest, coloured areas get blocky |
 | `MRC_BG_COMPRESSION_RATE` | `200` | 50–800 | JPEG 2000 compression of the background. 50 = barely compressed; 800 = very small, coloured areas and pictures get blotchy |
 | `MRC_MAX_DPI` | `0` | 0, 150–1200 | Downscale scans above this resolution before compressing: faster and smaller, but the finest details are lost. 0 = off (keep the scan's resolution) |
-| `MRC_FIT_A4` | `true` | | Scale implausibly large page sizes to A4 |
+| `MRC_FIT_A4` | `true` | | Scale implausibly large page sizes (shorter side larger than A3, e.g. 72-ppi phone scans) down to the target size |
+| `MRC_FIT_PAGE_SIZE` | `a4` | `a4`, `letter`, `legal` | Target size for that scaling (aspect ratio is kept) |
 | **Page selection** | | | |
 | `MRC_MIXED_PDFS` | `true` | | Also process PDFs that contain digital pages (these stay unchanged); `false` = only PDFs that consist entirely of scans |
 | `MRC_SKIP_PHOTOS` | `true` | | Leave photo pages unchanged |
@@ -174,7 +176,8 @@ number) is replaced by the default and reported in the log.
 | `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | 1–3 | Only straighten if the best angle clearly stands out. 1 = always (logos or stamps on pages with little text can tilt a straight page); 3 = only pages with many clear lines of text |
 | **Blank pages** | | | |
 | `MRC_REMOVE_BLANK_PAGES` | `true` | | Remove blank scanned pages |
-| `MRC_BLANK_INK_PERCENT` | `0.005` | 0–1 | A page is blank below this share of ink in %. 0 = never remove; a page with only a page number has about 0.05 % |
+| `MRC_BLANK_INK_PERCENT` | `0.005` | 0–1 | A page is blank below this share of ink in %. 0 = never remove; a page with only a page number has about 0.01 % |
+| `MRC_BLANK_INK_CONTRAST` | `20` | 10–100 | For the blank check, a pixel counts as ink if it is this many brightness levels darker than the paper around it. Lower = faint content keeps a page (10: strong show-through may too); higher = only clear marks count (40 = before 11/2026: pale photos and faded receipts were removed) |
 | `MRC_BLANK_PAPER_PERCENT` | `90` | 0–100 | A page can only be blank if at least this share (%) looks like paper – protects low-contrast photos (e.g. of a white wall) |
 | **Other** | | | |
 | `MRC_JOBS` | – | 1–64 | Pages processed at the same time; overrides `PAPERLESS_THREADS_PER_WORKER` |

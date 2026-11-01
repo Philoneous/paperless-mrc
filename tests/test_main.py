@@ -6,9 +6,10 @@ from pathlib import Path
 import pikepdf
 import pymupdf
 import pytest
-from conftest import (LETTER, add_vector_scan_page, blank_back, insurance_page, letter_page, page_number_only,
-                      photo_page, wall_photo, write_scan_pdf)
-from PIL import Image, ImageDraw
+import numpy as np
+from conftest import (FONT, LETTER, add_vector_scan_page, blank_back, insurance_page, letter_page, page_number_only,
+                      paper, photo_page, wall_photo, write_scan_pdf)
+from PIL import Image, ImageDraw, ImageFont
 
 from paperless_mrc import main as mrc
 
@@ -64,12 +65,33 @@ def test_vorhandene_textebene_wird_uebernommen(tmp_path, rng):
 def test_nur_wirklich_leere_seiten_werden_entfernt(tmp_path, rng):
     path = write_scan_pdf(tmp_path / "leer.pdf", [letter_page(rng), blank_back(rng), page_number_only(rng)])
     with pymupdf.open(path) as doc:
-        inks = [mrc.ink_percent(p) for p in doc]
+        inks = [mrc.ink_percent(p, mrc.BLANK_INK_CONTRAST) for p in doc]
         assert mrc.paper_percent(doc[1]) > 90
     assert inks[1] < mrc.BLANK_INK_PERCENT <= inks[2], inks
     mrc.process(path, SETTINGS)
     assert page_count(path) == 2
     assert "Seite 3 von 3" in text_of(path)
+
+
+def faded_page(rng, contrast: int) -> Image.Image:
+    """Verblasster Beleg: Textzeilen nur `contrast` Helligkeitsstufen dunkler als das Papier."""
+    img = paper(rng)
+    text = Image.new("L", img.size, 0)
+    d = ImageDraw.Draw(text)
+    for i in range(30):
+        d.text((300, 300 + i * 60), f"ARTIKEL {i:02d}  MENGE 1  PREIS {i * 1.37 + 0.99:6.2f} EUR",
+               font=ImageFont.truetype(FONT, 30), fill=255)
+    a = np.asarray(img, np.float32) - contrast * np.asarray(text, np.float32)[..., None] / 255
+    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+
+
+def test_blasse_seite_ist_nicht_leer(tmp_path, rng):
+    # Schrift mit 30 Stufen Kontrast: bei 40 Stufen „keine Tinte“ (früher als leer gelöscht), bei 20 erkannt
+    path = write_scan_pdf(tmp_path / "blass.pdf", [letter_page(rng), faded_page(rng, 30)])
+    with pymupdf.open(path) as doc:
+        assert mrc.ink_percent(doc[1]) < mrc.BLANK_INK_PERCENT <= mrc.ink_percent(doc[1], mrc.BLANK_INK_CONTRAST)
+    mrc.process(path, SETTINGS)
+    assert page_count(path) == 2
 
 
 def test_alle_seiten_leer_bleibt_unveraendert(tmp_path, rng):
@@ -87,6 +109,22 @@ def test_uebergrosse_seite_wird_auf_a4_skaliert(tmp_path, rng):
         rect = doc[0].rect
     assert abs(rect.width - 595.28) < 3 or abs(rect.height - 841.89) < 3
     assert rect.width <= 596 and rect.height <= 842
+
+
+def test_uebergrosse_seite_auf_letter(tmp_path, rng, monkeypatch):
+    img = letter_page(rng)
+    path = write_scan_pdf(tmp_path / "gross_letter.pdf", [img], page_size=(img.width, img.height))
+    monkeypatch.setenv("MRC_FIT_PAGE_SIZE", "Letter")
+    mrc.process(path, settings(fit_size=mrc.Settings.from_env().fit_size))
+    with pymupdf.open(path) as doc:
+        rect = doc[0].rect
+    assert abs(rect.width - 612) < 3 or abs(rect.height - 792) < 3
+    assert rect.width <= 613 and rect.height <= 793
+
+
+def test_ungueltiges_zielformat_nimmt_a4(monkeypatch):
+    monkeypatch.setenv("MRC_FIT_PAGE_SIZE", "tabloid")
+    assert mrc.Settings.from_env().fit_size == "a4"
 
 
 def test_parallel_behaelt_seitenreihenfolge(tmp_path, rng):
@@ -156,12 +194,17 @@ def test_fehler_laesst_datei_unveraendert(tmp_path, rng, monkeypatch, capsys):
 
 
 def test_mrc_einstellungen_aus_umgebung(monkeypatch):
-    for name in ("MRC_REMOVE_BLANK_PAGES", "MRC_BLANK_INK_PERCENT", "MRC_BG_DOWNSAMPLE",
+    for name in ("MRC_REMOVE_BLANK_PAGES", "MRC_BLANK_INK_PERCENT", "MRC_BLANK_INK_CONTRAST", "MRC_BG_DOWNSAMPLE",
                  "MRC_BG_COMPRESSION_RATE", "MRC_FIT_A4"):
         monkeypatch.delenv(name, raising=False)
     s = mrc.Settings.from_env()
     assert (s.remove_blank, s.blank_ink_percent, s.bg_downsample, s.bg_rate, s.fit_a4) == (
         True, mrc.BLANK_INK_PERCENT, 2, 200.0, True)  # bisheriges Verhalten
+    assert s.blank_ink_contrast == mrc.BLANK_INK_CONTRAST
+    monkeypatch.setenv("MRC_BLANK_INK_CONTRAST", "40")
+    assert mrc.Settings.from_env().blank_ink_contrast == 40
+    monkeypatch.setenv("MRC_BLANK_INK_CONTRAST", "5")  # unter dem Bereich → Minimum
+    assert mrc.Settings.from_env().blank_ink_contrast == 10
     monkeypatch.setenv("MRC_REMOVE_BLANK_PAGES", "false")
     monkeypatch.setenv("MRC_BLANK_INK_PERCENT", "0.02")
     monkeypatch.setenv("MRC_BG_DOWNSAMPLE", "3")

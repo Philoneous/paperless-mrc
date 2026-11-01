@@ -11,7 +11,7 @@ Ablauf je Dokument:
   3. Jede Seite in nativer Auflösung rendern (inkl. darübergelegter Grafiken).
   4. Textebene: vorhandene übernehmen, sonst Tesseract (mit Drehung/Begradigung).
   5. MRC-Kodierung je Scan-Seite, an ihrer Stelle in die Originaldatei einsetzen (Lesezeichen und
-     Metadaten bleiben), Übergrößen auf A4, SMask-Farbraum korrigieren.
+     Metadaten bleiben), Übergrößen auf A4 (oder Letter/Legal), SMask-Farbraum korrigieren.
   6. Ergebnis prüfen; nur wenn alles stimmt und es kleiner ist, Arbeitskopie ersetzen.
 
 Bei jedem Fehler bleibt die Arbeitskopie unverändert und das Skript endet mit 0,
@@ -43,8 +43,16 @@ from PIL import Image, ImageFilter
 from paperless_mrc import originals
 
 A4 = (595.28, 841.89)  # pt
+PAGE_SIZES = {"a4": A4, "letter": (612.0, 792.0), "legal": (612.0, 1008.0)}  # Ziele für MRC_FIT_PAGE_SIZE (pt)
 A3_WIDTH = 841.89  # pt; ist die kürzere Seite größer, ist die Seitengröße offensichtlich falsch
-BLANK_INK_PERCENT = 0.005  # nur wirklich leere Seiten (eine Seitenzahl liegt bei ca. 0,05 %)
+BLANK_INK_PERCENT = 0.005  # nur wirklich leere Seiten (nur eine Seitenzahl: gemessen 0,008–0,01 %)
+INK_CONTRAST = 40  # „Tinte“ = so viel dunkler als der lokale Papierton (Helligkeitsstufen)
+# Für die Leerseitenprüfung zählen schon schwächere Kontraste: blasse Inhalte (Foto einer hellen Wand, verblasster
+# Beleg) lagen auf echten Scans unter 40 und wurden als leer gelöscht. Gemessen (11/2026, echte Scans und daraus
+# abgeleitete Varianten): leere Seiten auch mit Lichtabfall bis 35 Stufen, Recyclingpapier oder durchscheinender
+# Rückseite (25 Stufen) 0 %; blasse Wand 0,012–0,016 %, Beleg mit 30 Stufen Kontrast 0,18 %. Bei 15 zählte bereits
+# kräftiges Durchscheinen als Tinte.
+BLANK_INK_CONTRAST = 20
 MIN_SKEW_DEG = 0.2
 TOOLS_DIR = Path(sys.executable).parent  # recode_pdf, pdf-to-hocr, pdf-metadata-json
 
@@ -88,7 +96,8 @@ MESSAGES = {
                        "ungedreht, {turned} um {degrees}° gedreht"),
     "skew_unclear": ("{label}: skew unclear – not straightened", "{label}: Schräglage nicht eindeutig – nicht begradigt"),
     "deskewed": ("{label}: skew {angle:+.1f}° corrected", "{label}: Schräglage {angle:+.1f}° korrigiert"),
-    "resized": ("{n} page(s) with wrong page size scaled to A4", "{n} Seite(n) mit falscher Seitengröße auf A4 skaliert"),
+    "resized": ("{n} page(s) with wrong page size scaled to {size}",
+                "{n} Seite(n) mit falscher Seitengröße auf {size} skaliert"),
     "page_count": ("page count {got} instead of {expected}", "Seitenzahl {got} statt {expected}"),
     "text_incomplete": ("page {n}: text incomplete ({after}/{before} words)",
                         "Seite {n}: Text unvollständig ({after}/{before} Wörter)"),
@@ -123,6 +132,8 @@ MESSAGES = {
     "cleanup_failed": ("cleanup failed: {error}", "Aufräumen fehlgeschlagen: {error}"),
     "invalid_setting": ("{name}={value!r} is not a number – using the default {default}",
                         "{name}={value!r} ist keine Zahl – Standard {default} wird verwendet"),
+    "invalid_choice": ("{name}={value!r} is not one of {choices} – using the default {default}",
+                       "{name}={value!r} ist nicht eins von {choices} – Standard {default} wird verwendet"),
     "lap_render": ("render", "Rendern"),
     "lap_text_layer": ("text layer", "Textebene"),
     "lap_orientation": ("orientation", "Ausrichtung"),
@@ -155,6 +166,7 @@ RANGES: dict[str, tuple[float, float]] = {
     "PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD": (0, 100),
     "MRC_JOBS": (1, 64),
     "MRC_BLANK_INK_PERCENT": (0, 1),
+    "MRC_BLANK_INK_CONTRAST": (10, 100),
     "MRC_BLANK_PAPER_PERCENT": (0, 100),
     "MRC_BG_DOWNSAMPLE": (1, 4),
     "MRC_BG_COMPRESSION_RATE": (50, 800),
@@ -188,6 +200,17 @@ def _env_num(name: str, default: float, cast: type = float, fallback: str | None
     return cast(round(value)) if cast is int else cast(value)
 
 
+def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """Wert aus einer festen Auswahl (Groß-/Kleinschreibung egal); ungültig → Standard + Meldung."""
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    if value not in choices:
+        log(t("invalid_choice", name=name, value=value, choices="/".join(choices), default=default))
+        return default
+    return value
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -207,9 +230,11 @@ class Settings:
     # Eigene Einstellungen (MRC_*), Standardwerte = bisheriges festes Verhalten
     remove_blank: bool = True
     blank_ink_percent: float = BLANK_INK_PERCENT
+    blank_ink_contrast: int = BLANK_INK_CONTRAST  # für „leer“ zählt schon so viel Kontrast als Tinte (Stufen)
     bg_downsample: int = 2  # Hintergrund in 1/n der Auflösung
     bg_rate: float = 200.0  # JPEG2000-Kompressionsrate des Hintergrunds (opj_compress -r)
-    fit_a4: bool = True
+    fit_a4: bool = True  # unplausibel große Seiten verkleinern (Name historisch; Ziel: fit_size)
+    fit_size: str = "a4"  # Zielformat dafür: a4, letter, legal
     deskew_min: float = MIN_SKEW_DEG  # kleinere Schräglagen werden nicht korrigiert
     deskew_max: float = 5.0  # gesuchter Bereich ±; Ergebnis am Rand gilt als unklar → nicht drehen
     deskew_confidence: float = 1.3  # bester Winkel muss sich so deutlich abheben (× Median), sonst nicht drehen
@@ -244,9 +269,11 @@ class Settings:
             jobs=_env_num("MRC_JOBS", default_jobs, int, fallback="PAPERLESS_THREADS_PER_WORKER"),
             remove_blank=_env_bool("MRC_REMOVE_BLANK_PAGES", True),
             blank_ink_percent=_env_num("MRC_BLANK_INK_PERCENT", BLANK_INK_PERCENT),
+            blank_ink_contrast=_env_num("MRC_BLANK_INK_CONTRAST", BLANK_INK_CONTRAST, int),
             bg_downsample=_env_num("MRC_BG_DOWNSAMPLE", 2, int),
             bg_rate=_env_num("MRC_BG_COMPRESSION_RATE", 200.0),
             fit_a4=_env_bool("MRC_FIT_A4", True),
+            fit_size=_env_choice("MRC_FIT_PAGE_SIZE", "a4", tuple(PAGE_SIZES)),
             deskew_min=_env_num("MRC_DESKEW_MIN_ANGLE", MIN_SKEW_DEG),
             deskew_max=_env_num("MRC_DESKEW_MAX_ANGLE", 5.0),
             deskew_confidence=_env_num("MRC_DESKEW_MIN_CONFIDENCE", 1.3),
@@ -316,16 +343,21 @@ def is_vector_page(page: pymupdf.Page, min_items: int) -> bool:
     return sum(len(path["items"]) for path in page.get_cdrawings()) >= min_items
 
 
-def ink_percent(page: pymupdf.Page) -> float:
-    """Anteil Pixel, die deutlich dunkler sind als der lokale Papierton (Rand ignoriert)."""
+def ink_contrast(page: pymupdf.Page) -> np.ndarray:
+    """Je Pixel: um wie viele Helligkeitsstufen dunkler als der lokale Papierton (Rand ignoriert)."""
     zoom = 600 / page.rect.width
     pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csGRAY, alpha=False)
     gray = Image.frombytes("L", (pix.width, pix.height), pix.samples)
     # lokaler Papierton: Median auf 1/4 der Auflösung (wie Fenster 31 px bei voller), dann zurückskaliert
     paper = gray.reduce(4).filter(ImageFilter.MedianFilter(7)).resize(gray.size, Image.BILINEAR)
-    ink = (np.asarray(paper, np.int16) - np.asarray(gray, np.int16)) > 40
-    m_y, m_x = max(int(0.02 * ink.shape[0]), 1), max(int(0.02 * ink.shape[1]), 1)
-    return float(ink[m_y:-m_y, m_x:-m_x].mean() * 100)
+    darker = np.asarray(paper, np.int16) - np.asarray(gray, np.int16)
+    m_y, m_x = max(int(0.02 * darker.shape[0]), 1), max(int(0.02 * darker.shape[1]), 1)
+    return darker[m_y:-m_y, m_x:-m_x]
+
+
+def ink_percent(page: pymupdf.Page, contrast: int = INK_CONTRAST) -> float:
+    """Anteil Pixel (%), die mindestens um contrast dunkler sind als der lokale Papierton."""
+    return float((ink_contrast(page) > contrast).mean() * 100)
 
 
 def paper_percent(page: pymupdf.Page) -> float:
@@ -342,11 +374,13 @@ def paper_percent(page: pymupdf.Page) -> float:
     return float(((np.abs(luma - paper) < 30) & (saturation < 40)).mean() * 100)
 
 
-def analyse_page(path: Path, index: int) -> tuple[float, float]:
-    """Tintenanteil und Papieranteil einer Seite (je %)."""
+def analyse_page(path: Path, index: int, blank_contrast: int = BLANK_INK_CONTRAST) -> tuple[float, float, float]:
+    """Tintenanteil, Tintenanteil bei blank_contrast (für die Leerseitenprüfung) und Papieranteil einer Seite (je %)."""
     with pymupdf.open(path) as doc:
         page = doc[index]
-        return ink_percent(page), paper_percent(page)
+        darker = ink_contrast(page)
+        return (float((darker > INK_CONTRAST).mean() * 100), float((darker > blank_contrast).mean() * 100),
+                paper_percent(page))
 
 
 def confident_words(hocr: str, min_confidence: int = 60) -> int:
@@ -536,13 +570,13 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
     return out, has_text
 
 
-def fit_a4(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:
-    """Skaliert offensichtlich zu große Seiten (z. B. 72-ppi-Handyscans) auf A4."""
+def fit_page(pdf: pikepdf.Pdf, page: pikepdf.Page, size: tuple[float, float] = A4) -> bool:
+    """Skaliert offensichtlich zu große Seiten (z. B. 72-ppi-Handyscans) in das Zielformat (Seitenverhältnis bleibt)."""
     x0, y0, x1, y1 = (float(v) for v in page.mediabox)
     w, h = x1 - x0, y1 - y0
     if min(w, h) <= A3_WIDTH:
         return False
-    box_w, box_h = (A4[1], A4[0]) if w > h else A4
+    box_w, box_h = (size[1], size[0]) if w > h else size
     f = min(box_w / w, box_h / h)
     page.contents_add(pikepdf.Stream(pdf, f"q {f:.6f} 0 0 {f:.6f} {-x0 * f:.4f} {-y0 * f:.4f} cm\n".encode()),
                       prepend=True)
@@ -603,10 +637,10 @@ def build(src: Path, encode: list[int], blank: list[int], settings: Settings, wo
             part = parts.enter_context(pikepdf.open(path))  # bis zum Speichern offen halten
             page = pdf.pages[index]
             replace_page_content(pdf, page, part.pages[0])
-            resized += settings.fit_a4 and fit_a4(pdf, page)
+            resized += settings.fit_a4 and fit_page(pdf, page, PAGE_SIZES[settings.fit_size])
             fix_smask_colorspace(page)
         if resized:
-            log(t("resized", n=resized))
+            log(t("resized", n=resized, size={"a4": "A4", "letter": "Letter", "legal": "Legal"}[settings.fit_size]))
         for index in sorted(blank, reverse=True):
             del pdf.pages[index]
         out = work / "result.pdf"
@@ -672,14 +706,14 @@ def process(path: Path, settings: Settings) -> None:
     photos, blank, doubtful = [], [], set()
     if settings.remove_blank or settings.skip_photos:
         # im eigenen Prozess: ~0,1 s je Seite, Prozessstart wäre teurer (live: 2,3 s statt 6,6 s mit 4 Prozessen)
-        stats = [analyse_page(path, i) for i in candidates]
-        for i, (ink, paper) in zip(candidates, stats):
+        stats = [analyse_page(path, i, settings.blank_ink_contrast) for i in candidates]
+        for i, (ink, faint_ink, paper) in zip(candidates, stats):
             little_ink = ink < settings.blank_ink_percent
-            if little_ink and paper >= settings.blank_paper_percent:  # leeres Papier
+            if faint_ink < settings.blank_ink_percent and paper >= settings.blank_paper_percent:  # leeres Papier
                 if settings.remove_blank:
                     blank.append(i)
             elif settings.skip_photos and i in scans:
-                if little_ink:  # kaum Kontraste, aber kein Papier (z. B. Foto einer Wand)
+                if little_ink:  # kaum Kontraste, aber kein leeres Papier (z. B. Foto einer Wand, blasser Beleg)
                     photos.append(i)
                 elif paper < settings.photo_paper_percent:
                     # farbig hinterlegtes Dokument oder Foto: entscheidet die Texterkennung
