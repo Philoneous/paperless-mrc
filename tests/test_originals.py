@@ -186,3 +186,19 @@ def test_paperless_conf_wird_fuer_den_timer_gelesen(tmp_path, monkeypatch):
     originals.load_conf(conf)
     api = originals.Api.from_env()
     assert api.token == "abc" and api.base == "http://localhost:8010/api/" and originals.days() == 3
+
+
+def test_feld_wird_nachgesetzt_ohne_zweiten_upload(tmp_path, rng, env, monkeypatch, capsys):
+    """Version angehängt, aber Setzen des Felds scheitert: kein zweiter Upload, Aufräumen setzt das Feld nach."""
+    hold, server = env
+    consume(tmp_path, rng, server)
+    monkeypatch.setenv("DOCUMENT_ID", "7")
+    server.fail_bulk_edit = 1
+    assert originals.post_consume() == 0
+    assert "HTTP 500" in capsys.readouterr().out
+    doc = server.docs[7]
+    assert len(doc["versions"]) == 2 and doc["custom_fields"] == []
+    counts = originals.cleanup(originals.Api.from_env())
+    assert counts["attached"] == 0 and counts["released"] == 1
+    assert len(doc["versions"]) == 2  # kein zweites Original
+    assert doc["custom_fields"] == [{"field": server.fields[0]["id"], "value": "mrc-auto"}]

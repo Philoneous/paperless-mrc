@@ -213,9 +213,11 @@ def attach(api: Api, task_id: str, doc_id: int) -> bool:
     except Exception:
         marker.unlink(missing_ok=True)
         raise
-    set_field(api, doc_id, field_id, AUTO)
+    # Sofort festhalten: Ein Fehler beim Setzen des Felds darf nicht zu einem zweiten Upload führen –
+    # das Feld setzt dann das Aufräumen nach
     meta.update(doc_id=doc_id, uploaded=_now())
     meta_file.write_text(json.dumps(meta))
+    set_field(api, doc_id, field_id, AUTO)
     log(t("original_attached", doc=doc_id, days=days()))
     return True
 
@@ -305,6 +307,10 @@ def cleanup(api: Api) -> dict:
             if _now() - meta["uploaded"] > CONFIRM_WARN_HOURS * 3600:
                 log(t("original_not_arrived", doc=meta["doc_id"], file=folder / f"{task_id}.pdf"))
             continue
+        if doc is not None:  # Feld fehlt (Setzen war gescheitert)? Dann jetzt mit dem Standard nachholen
+            field_id = ensure_field(api)
+            if not any(cf["field"] == field_id for cf in doc.get("custom_fields", [])):
+                set_field(api, meta["doc_id"], field_id, AUTO)
         for leftover in (folder / f"{task_id}.pdf", meta_file, folder / f"{meta['sha256']}.version"):
             leftover.unlink(missing_ok=True)
         counts["released"] += 1

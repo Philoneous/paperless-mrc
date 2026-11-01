@@ -27,6 +27,7 @@ class Paperless:
         self.next_id = 100
         self.calls: list[str] = []
         self.tasks: dict[str, int] = {}  # TASK_ID → angelegtes Dokument
+        self.fail_bulk_edit = 0  # so viele bulk_edit-Aufrufe scheitern lassen
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -125,6 +126,9 @@ class Paperless:
                     api.fields.append(field)
                     return self._send(201, field)
                 if path == "/api/documents/bulk_edit/":
+                    if api.fail_bulk_edit:
+                        api.fail_bulk_edit -= 1
+                        return self._send(500, "Error performing bulk edit, check logs for more detail.")
                     data = json.loads(body)
                     assert data["method"] == "modify_custom_fields"
                     params = data["parameters"]
