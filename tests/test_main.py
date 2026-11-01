@@ -501,3 +501,23 @@ def test_without_poppler_check_no_pdftoppm_needed(tmp_path, rng, monkeypatch):
     assert "pdftoppm" not in calls
     assert path.stat().st_size < before / 3  # trotzdem komprimiert
     assert "Jahresabrechnung" in text_of(path)
+
+
+def test_einstellungen_begrenzt_und_robust(monkeypatch, capsys):
+    """Werte außerhalb des Bereichs werden begrenzt, Tippfehler ergeben den Standard statt eines Abbruchs."""
+    for name, value in {"MRC_SHARPEN": "15O", "MRC_MASK_FACTOR": "3", "MRC_MAX_DPI": "50",
+                        "MRC_BG_COMPRESSION_RATE": "5000", "MRC_PHOTO_PAPER_PERCENT": "-5",
+                        "MRC_DESKEW_MAX_ANGLE": "90"}.items():
+        monkeypatch.setenv(name, value)
+    s = mrc.Settings.from_env()
+    assert (s.sharpen, s.mask_sensitivity, s.max_dpi, s.bg_rate, s.photo_paper_percent, s.deskew_max) == \
+        (150, 1.0, 150, 800.0, 0.0, 45.0)
+    assert "MRC_SHARPEN" in capsys.readouterr().out
+    for name in mrc.RANGES:  # Standardwerte liegen im Bereich
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("PAPERLESS_THREADS_PER_WORKER", raising=False)
+    s = mrc.Settings.from_env()
+    for name, field in {"MRC_SHARPEN": "sharpen", "MRC_MASK_FACTOR": "mask_sensitivity", "MRC_BG_DOWNSAMPLE":
+                        "bg_downsample", "MRC_BG_COMPRESSION_RATE": "bg_rate", "MRC_VECTOR_DPI": "vector_dpi"}.items():
+        lo, hi = mrc.RANGES[name]
+        assert lo <= getattr(s, field) <= hi

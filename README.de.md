@@ -1,155 +1,185 @@
-# paperless-mrc
+# paperless-mrc – gescannte PDFs in Paperless-ngx verkleinern
 
 *[English](README.md) · Deutsch*
 
-Pre-Consume-Skript für [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) (getestet mit 3.3.0).
-Es verkleinert gescannte PDFs per *Mixed Raster Content* (MRC, [archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools)),
-bevor Paperless sie verarbeitet. Paperless speichert danach nur noch diese eine, kleine Datei.
+**paperless-mrc macht gescannte Dokumente in [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) meist 5-
+bis 30-mal kleiner – Schrift bleibt scharf, Farben bleiben erhalten, das Dokument bleibt durchsuchbar.** Es läuft
+automatisch als Pre-Consume-Skript: Jeder neue Scan wird komprimiert, bevor Paperless ihn speichert. Im Archiv liegt
+danach nur noch die kleine Datei.
 
-MRC zerlegt jede Seite in eine verlustfrei komprimierte Schwarz-Weiß-Maske (Text, Linien) und zwei stark komprimierte
-Farbebenen (Hintergrund, Farben von Logos, Stempeln, Unterschriften). Farbe bleibt also erhalten, wo sie vorkommt.
+Dafür nutzt es *Mixed Raster Content* (MRC), das Verfahren hinter kompakten PDF-Archiven wie dem des Internet Archive,
+über [archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools). Die Texterkennung (OCR) übernimmt
+[Tesseract](https://github.com/tesseract-ocr/tesseract).
 
-## Ergebnis mit echten Scans
+> Am Mac? Die App [PDF MRC](https://github.com/Philoneous/mac-pdf-mrc) komprimiert PDFs mit demselben Verfahren per
+> Rechtsklick im Finder – ganz ohne Server.
 
-Vier Handyscans (macOS/iOS-Scanfunktion, verlustfrei gespeicherte Seitenbilder, 6 Seiten):
+## Typische Ergebnisse
 
-| Datei | vorher | nachher |
+| Dokument | vorher | nachher |
 |---|---:|---:|
-| 1 Seite | 3.767 KB | 75 KB |
-| 2 Seiten | 5.832 KB | 139 KB |
-| 1 Seite | 2.477 KB | 66 KB |
-| 2 Seiten | 559 KB | 95 KB |
-| **Summe** | **12.637 KB** | **375 KB** |
+| Einseitiger Farbbrief (Testseite, simulierter Bürokopierer-Scan, 300 dpi) | 956 KB | 126 KB |
+| Derselbe Brief in 200 dpi | 496 KB | 65 KB |
+| Vier echte Handyscans, zusammen 6 Seiten (iPhone/Mac-Scanner) | 12.637 KB | 375 KB |
 
-Die vorhandene Textebene blieb vollständig erhalten, Logos blieben farbig, Kleingedrucktes lesbar.
-Die Maske war dabei CCITT-komprimiert; mit jbig2enc werden die Dateien noch etwas kleiner.
+Kleingedrucktes bis 5 pt, hellgraue und farbige Schrift, Logos, Stempel und Unterschriften bleiben lesbar. Gemessen mit
+CCITT-Maske; mit installiertem jbig2enc werden die Dateien noch etwas kleiner.
 
-## Was das Skript tut
+## So funktioniert es
 
-1. **Nur gescannte Seiten:** Eine Seite gilt als Scan, wenn sie aus genau einem Seitenbild besteht, ohne sichtbaren Text.
-   Nur diese Seiten werden neu kodiert. Andere Seiten (z. B. ein angehängtes digitales Anschreiben), Lesezeichen und
-   Metadaten bleiben unverändert. Rein digitale PDFs, digital signierte PDFs und direkt hochgeladene Bilder
+Eine gescannte Seite ist ein Foto von Papier. MRC zerlegt sie in drei Ebenen, die jeweils passend komprimiert werden:
+
+- **Textebene:** Schrift und Linien als scharfes Schwarz-Weiß-Bild in voller Auflösung, verlustfrei komprimiert
+  (JBIG2 oder CCITT) – deshalb bleibt Schrift gestochen scharf.
+- **Hintergrund:** Papier, farbige Flächen und Bilder in geringerer Auflösung, komprimiert mit JPEG 2000.
+- **Schriftfarbe:** ein kleines Bild, das Buchstaben, Logos und Stempeln ihre Farbe gibt.
+
+Ein normaler Scan speichert jede Seite als ein großes Foto; MRC behält die Details nur dort, wo sie zählen.
+
+## Was mit jedem Dokument passiert
+
+1. **Nur gescannte Seiten werden bearbeitet.** Eine Seite gilt als gescannt, wenn sie aus einem einzigen Seitenbild
+   ohne sichtbaren Text besteht. Digitale Seiten (z. B. ein erzeugtes Anschreiben vor einem Scan), Lesezeichen und
+   Metadaten bleiben genau so, wie sie sind. Rein digitale PDFs, **digital signierte PDFs** und hochgeladene Bilder
    (JPEG, PNG …) bleiben ganz unverändert.
-   - **Fotos** (z. B. Schadensfotos) lässt das Skript unverändert, weil MRC sie sichtbar verschlechtert. Seiten mit
-     überwiegend Papierfläche gelten als Dokument. Bei allen anderen – Fotos, aber auch grau oder farbig hinterlegte
-     Textblöcke wie in Versicherungsscheinen – entscheidet die Texterkennung: Nur mit genug sicher erkannten Wörtern ist
-     es ein Dokument. Seiten fast ohne Kontrast, die kein Papier sind (z. B. Foto einer Wand), bleiben unverändert und
-     werden nie als leer entfernt.
-   - **Vektorisierte Scans** (manche Scanprogramme speichern Seiten als Tausende Vektorelemente ohne Text) werden
-     mit 300 dpi gerastert, komprimiert und per Tesseract durchsuchbar gemacht.
-2. **Leere Seiten entfernen:** nur wirklich leere gescannte Seiten. Papierton, Rauschen und durchscheinende Rückseiten zählen nicht
-   als Inhalt; eine Seite mit nur einer Seitenzahl bleibt erhalten.
-3. **Seiten rendern** in nativer Auflösung, einschließlich darübergelegter Grafiken (z. B. Markierungen).
-4. **Textebene:** Eine vorhandene Textebene (z. B. von der iOS-Scanfunktion) wird übernommen. Sonst erkennt Tesseract den Text,
-   vorher werden Seiten bei Bedarf gedreht und begradigt. Ist die Schräglage nicht eindeutig (Messwert am Rand des
-   Suchbereichs, z. B. bei Seiten ohne Textzeilen), wird nicht begradigt.
-5. **MRC-Kodierung** je Seite (Hintergrund halbe Auflösung, JPEG2000), offensichtlich falsche Seitengrößen
-   (z. B. 61 × 86 cm bei Handyscans) werden auf A4 korrigiert.
-6. **Prüfung:** Seitenzahl, Vollständigkeit der übernommenen Textebene und des Texts digitaler Seiten, fehlerfreie Darstellung mit Poppler, kleinere Datei.
-   Nur dann wird die Arbeitskopie ersetzt.
+   - **Fotos bleiben, wie sie sind**, weil MRC sie sichtbar verschlechtern würde. Eine Seite, die überwiegend aus
+     Papier besteht, gilt als Dokument; bei allen anderen (Fotos, aber auch Formulare mit grau hinterlegten Feldern)
+     entscheidet die Texterkennung.
+   - **Vektorisierte Scans** – manche Scanner-Software speichert eine Seite als Tausende Zeichenelemente statt als
+     Bild – werden in ein Bild umgewandelt, komprimiert und durchsuchbar gemacht.
+2. **Leere Seiten werden entfernt** – z. B. leere Rückseiten beim beidseitigen Scannen. Papierton, Rauschen und
+   Durchscheinendes zählen nicht als Inhalt; eine Seite mit nur einer Seitenzahl bleibt.
+3. **Texterkennung:** Eine vorhandene Textebene (z. B. vom Scanner) bleibt erhalten. Sonst erkennt Tesseract den Text –
+   nachdem auf dem Kopf stehende oder quer liegende Seiten gedreht und schiefe Seiten begradigt wurden.
+4. **Komprimierung** jeder Seite mit MRC; unplausible Seitengrößen (z. B. Handyscans, die ein Vielfaches von A4 groß
+   gespeichert sind) werden auf A4 korrigiert.
+5. **Prüfung:** gleiche Seitenzahl, Textebene vollständig, die Datei lässt sich fehlerfrei darstellen und ist kleiner.
+   Erst dann wird das Original ersetzt.
 
-Bei **jedem Fehler** bleibt die Datei unverändert und Paperless verarbeitet sie wie bisher.
+Geht **irgendetwas schief**, bleibt die Datei unverändert und Paperless verarbeitet sie wie gewohnt.
 
 ## Voraussetzungen
 
-- Paperless-ngx 3.x, uv-basierte Installation (Layout der [community-scripts](https://community-scripts.github.io/ProxmoxVE/)).
-- `PAPERLESS_OCR_MODE` auf `auto` (Standard) und `PAPERLESS_ARCHIVE_FILE_GENERATION` auf `auto` (Standard) oder `never`.
-  Dann erkennt Paperless die Textebene der komprimierten Datei, führt kein eigenes OCR mehr aus und legt keine zweite Datei an.
-- Optional `jbig2` (jbig2enc) für die kleinste Maske; ohne wird CCITT verwendet.
+- Paperless-ngx 3.x (getestet mit 3.3.0), installiert **ohne Docker** auf Debian/Ubuntu mit uv und systemd – so wie die
+  [Proxmox VE Helper-Scripts](https://community-scripts.github.io/ProxmoxVE/) es einrichten (`/opt/paperless`).
+  Docker-Installationen unterstützt der Installer nicht.
+- In Paperless: OCR-Modus `auto` (Standard) und Archivdatei-Erzeugung `auto` (Standard) oder `never`. Paperless nutzt
+  dann die Textebene der komprimierten Datei, führt keine eigene OCR aus und legt keine zweite Datei an.
+- Optional: `jbig2` ([jbig2enc](https://github.com/agl/jbig2enc)) für die kleinsten Dateien; ohne wird CCITT verwendet.
 
 ## Installation
 
-Im Paperless-Container als root:
+Als root im Paperless-Container (bzw. in der VM):
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Philoneous/paperless-mrc/main/install.sh)"
 ```
 
-(Bei einem privaten Repo stattdessen das Repo klonen und `bash install.sh` ausführen.)
-
 Der Installer
-- installiert die Systempakete (OpenJPEG-Werkzeuge, Poppler, Tesseract-Sprachpakete),
-- legt das Skript in einer eigenen Python-Umgebung unter `/opt/paperless-mrc` an,
-- trägt in `/opt/paperless/paperless.conf` `PAPERLESS_PRE_CONSUME_SCRIPT` und – falls noch nicht vorhanden –
-  `PAPERLESS_OCR_LANGUAGE` ein (Sicherung der Datei daneben),
-- bricht ab, wenn dort bereits ein anderes Pre-Consume-Skript steht,
+- installiert die nötigen Systempakete (OpenJPEG-Werkzeuge, Poppler, Tesseract-Sprachpakete),
+- richtet paperless-mrc in einer eigenen Python-Umgebung unter `/opt/paperless-mrc` ein,
+- trägt `PAPERLESS_PRE_CONSUME_SCRIPT` und – falls noch nicht gesetzt – `PAPERLESS_OCR_LANGUAGE` in
+  `/opt/paperless/paperless.conf` ein (eine Sicherung der Datei liegt daneben),
+- bricht ab, wenn dort schon ein anderes Pre-Consume-Skript eingetragen ist,
 - startet `paperless-task-queue` und `paperless-consumer` neu.
 
-**Update:** denselben Befehl erneut ausführen. **Entfernen:** die Zeile `PAPERLESS_PRE_CONSUME_SCRIPT=…` löschen und die
-beiden Dienste neu starten.
+**Aktualisieren:** denselben Befehl erneut ausführen. **Entfernen:** die Zeile `PAPERLESS_PRE_CONSUME_SCRIPT=…` aus
+`paperless.conf` löschen und beide Dienste neu starten.
 
-Die Ausgaben stehen im Paperless-Log mit dem Präfix `paperless-mrc:` – standardmäßig auf Englisch, mit
-`MRC_LANGUAGE=de` auf Deutsch. Zusätzlich schreibt das Skript je Dokument eine maschinenlesbare Zeile
-`paperless-mrc-result: {…}` (JSON, sprachunabhängig; Felder siehe englisches README), die z. B. die Mac-App auswertet.
+## Einstellungen
 
-## Konfiguration
+Ohne Einstellungen gelten die Standardwerte; sie sind auf die beste Lesbarkeit des Ergebnisses ausgelegt. paperless-mrc
+übernimmt diese Paperless-Einstellungen aus `paperless.conf`:
 
-Das Skript übernimmt diese Paperless-Einstellungen aus `paperless.conf` (mit denselben Standardwerten):
-
-| Variable | Wirkung im Skript |
+| Variable | Wirkung |
 |---|---|
 | `PAPERLESS_OCR_LANGUAGE` | Tesseract-Sprachen, z. B. `deu+eng` |
-| `PAPERLESS_OCR_DESKEW` | Schräglage korrigieren (nur Seiten ohne vorhandene Textebene) |
-| `PAPERLESS_OCR_ROTATE_PAGES` | Seiten drehen (nur Seiten ohne vorhandene Textebene) |
-| `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD` | Mindestsicherheit der Drehungserkennung |
-| `PAPERLESS_THREADS_PER_WORKER` | Seiten, die gleichzeitig verarbeitet werden (Standard wie Paperless: Kerne ÷ `PAPERLESS_TASK_WORKERS`) |
+| `PAPERLESS_OCR_DESKEW` | Schiefe Seiten begradigen (nur Seiten ohne vorhandene Textebene) |
+| `PAPERLESS_OCR_ROTATE_PAGES` | Seiten richtig herum drehen (nur Seiten ohne vorhandene Textebene) |
+| `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD` | Wie sicher die Lageerkennung sein muss, bevor gedreht wird (0–100, Standard 12) |
+| `PAPERLESS_THREADS_PER_WORKER` | Gleichzeitig verarbeitete Seiten (Standard wie in Paperless: Kerne ÷ `PAPERLESS_TASK_WORKERS`) |
 
-Werte, die nur in der Weboberfläche unter *Konfiguration* gesetzt sind, sieht das Skript nicht – deshalb trägt der
-Installer die Sprachen zusätzlich in `paperless.conf` ein.
+Werte, die nur in der Weboberfläche (*Konfiguration*) gesetzt sind, sieht das Skript nicht; deshalb trägt der
+Installer die OCR-Sprachen zusätzlich in `paperless.conf` ein.
 
-Eigene Einstellungen (optional, ebenfalls in `paperless.conf`; ohne Eintrag gilt der Standardwert):
+Weitere Einstellungen, ebenfalls in `paperless.conf`. Werte außerhalb des Bereichs werden auf ihn begrenzt; ein
+ungültiger Wert (keine Zahl) wird durch den Standard ersetzt und im Log gemeldet.
 
-| Variable | Standard | Wirkung |
-|---|---|---|
-| `MRC_REMOVE_BLANK_PAGES` | `true` | Leere gescannte Seiten entfernen |
-| `MRC_BLANK_INK_PERCENT` | `0.005` | Seite gilt als leer unter diesem Tintenanteil in % (eine Seitenzahl liegt bei ca. 0,05 %) |
-| `MRC_BG_DOWNSAMPLE` | `2` | Hintergrund in 1/n der Scan-Auflösung (Text und Linien bleiben in voller Auflösung) |
-| `MRC_BG_COMPRESSION_RATE` | `200` | JPEG2000-Kompressionsrate des Hintergrunds; höher = kleiner, aber Farbflächen und hellgraue Schrift leiden |
-| `MRC_FIT_A4` | `true` | Offensichtlich falsche Seitengrößen (z. B. 72-ppi-Handyscans) auf A4 skalieren |
-| `MRC_SKIP_PHOTOS` | `true` | Fotoseiten unverändert lassen |
-| `MRC_PHOTO_PAPER_PERCENT` | `50` | Seiten mit weniger Papierfläche in % werden per Texterkennung geprüft (gemessen: Dokumente auf weißem Papier 61–98 %, Fotos 11–43 %, farbig hinterlegte Versicherungsseiten darunter) |
-| `MRC_PHOTO_MIN_WORDS` | `10` | … und gelten unter so vielen sicher erkannten Wörtern (Konfidenz ≥ 60, ≥ 3 Zeichen) als Foto |
-| `MRC_BLANK_PAPER_PERCENT` | `90` | Leer kann eine Seite nur sein, wenn mindestens dieser Flächenanteil in % Papierton ist (schützt kontrastarme Fotos) |
-| `MRC_VECTOR_PAGES` | `true` | Vektorisierte Scans rastern und komprimieren |
-| `MRC_VECTOR_MIN_ITEMS` | `1000` | Seite ohne Bild und Text gilt ab so vielen Vektorelementen als vektorisierter Scan |
-| `MRC_VECTOR_DPI` | `300` | Rasterauflösung für vektorisierte Scans |
-| `MRC_DESKEW_MIN_ANGLE` | `0.2` | Kleinere Schräglagen (in Grad) werden nicht korrigiert |
-| `MRC_DESKEW_MAX_ANGLE` | `5` | Gesuchter Bereich ± in Grad; ein Ergebnis am Rand gilt als unklar und wird nicht korrigiert |
-| `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | Nur begradigen, wenn sich der beste Winkel deutlich abhebt (Bewertung ≥ Faktor × Median über den Suchbereich). Verhindert, dass Logos oder Stempel auf textarmen Seiten eine gerade Seite schief drehen |
-| `MRC_MIXED_PDFS` | `true` | PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert); `false`: nur reine Scan-PDFs |
-| `MRC_KEEP_TEXT_LAYER` | `true` | Vorhandene Textebene übernehmen; `false`: immer neu mit Tesseract erkennen (dann auch drehen/begradigen) |
-| `MRC_ROTATE_CHECK` | `true` | Ist sich die Ausrichtungserkennung unsicher (unter `PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD`), schlägt aber eine Drehung vor: Texterkennung in beiden Lagen, gedreht wird nur bei mindestens 1,5-mal so vielen (und mindestens 10) sicher erkannten Wörtern – z. B. hochkant gescannte Querformat-Formulare |
-| `MRC_POPPLER_CHECK` | `true` | Ergebnis zusätzlich mit Poppler rendern (`pdftoppm`, so liest Paperless es) und bei Fehlern verwerfen; `false`: auslassen (z. B. wenn ein anderer Darsteller prüft) |
-| `MRC_JOBS` | – | Seiten, die gleichzeitig verarbeitet werden; überschreibt `PAPERLESS_THREADS_PER_WORKER` (sonst Kerne ÷ `PAPERLESS_TASK_WORKERS`) |
-| `MRC_SHARPEN` | `150` | Nachschärfen vor der Kodierung in % (Unscharfmaskierung); hellgraue, dünne Schrift landet sonst teils im verkleinerten Hintergrund und wirkt unscharf. `0` = aus |
-| `MRC_SHARPEN_RADIUS` | `1.5` | Radius des Nachschärfens in Pixeln bei 200 dpi (wird mit der Auflösung skaliert) |
-| `MRC_MASK_FACTOR` | `0.5` | Empfindlichkeit der scharfen Textmaske (Faktor auf die Sauvola-Schwellen von recode_pdf): kleiner = auch hellgraue Striche bleiben scharf statt im verkleinerten Hintergrund zu landen; `1` = recode_pdf-Standard |
-| `MRC_MAX_DPI` | `0` | Höchstauflösung in dpi für komprimierte Seiten (z. B. `300`); höher aufgelöste Scans werden herunterskaliert – schneller und kleiner, feinste Details gehen verloren. `0` = aus |
-| `MRC_TIMING` | `false` | Laufzeiten je Seite und Arbeitsschritt ins Log schreiben (zur Analyse) |
-| `MRC_LANGUAGE` | `en` | Sprache der Meldungen im Log: `en` oder `de` |
+| Variable | Standard | Bereich | Wirkung |
+|---|---|---|---|
+| **Qualität und Größe** | | | |
+| `MRC_SHARPEN` | `150` | 0–300 | Nachschärfen in % vor dem Komprimieren, damit blasse, dünne Schrift scharf bleibt. 0 = aus (blasse Schrift kann fleckig wirken); hohe Werte machen Schrift kräftiger, verstärken aber auch Rauschen und Flecken |
+| `MRC_SHARPEN_RADIUS` | `1.5` | 0,5–5 | Breite des Nachschärfens in Pixeln bei 200 dpi (wird mit der Auflösung skaliert). Klein = nur feine Kanten, groß = sichtbare Lichthöfe |
+| `MRC_MASK_FACTOR` | `0.5` | 0,1–1 | Welche Pixel in die scharfe Textebene kommen. Kleiner = auch blasse Schrift und dünne Linien bleiben scharf, aber mehr Schmutzpunkte bleiben erhalten; 1 = Einstellung von recode_pdf selbst (blasse Schrift kann unscharf werden) |
+| `MRC_BG_DOWNSAMPLE` | `2` | 1–4 | Hintergrund in 1/n der Scan-Auflösung (Schrift bleibt immer in voller Auflösung). 1 = beste Farben und Bilder, größer; 4 = am kleinsten, Farbflächen werden blockig |
+| `MRC_BG_COMPRESSION_RATE` | `200` | 50–800 | JPEG-2000-Kompression des Hintergrunds. 50 = kaum komprimiert; 800 = sehr klein, Farbflächen und Bilder werden fleckig |
+| `MRC_MAX_DPI` | `0` | 0, 150–1200 | Scans oberhalb dieser Auflösung vor dem Komprimieren verkleinern: schneller und kleiner, feinste Details gehen verloren. 0 = aus (Auflösung des Scans bleibt) |
+| `MRC_FIT_A4` | `true` | | Unplausibel große Seitenformate auf A4 skalieren |
+| **Seitenauswahl** | | | |
+| `MRC_MIXED_PDFS` | `true` | | Auch PDFs mit digitalen Seiten bearbeiten (diese bleiben unverändert); `false` = nur PDFs, die ganz aus Scans bestehen |
+| `MRC_SKIP_PHOTOS` | `true` | | Fotoseiten unverändert lassen |
+| `MRC_PHOTO_PAPER_PERCENT` | `50` | 0–100 | Seiten mit weniger Papierfläche (in %) prüft die Texterkennung. 0 = nie prüfen (jede Seite gilt als Dokument), 100 = jede Seite prüfen. Dokumente auf weißem Papier haben typisch 60–98 %, Fotos 10–45 % |
+| `MRC_PHOTO_MIN_WORDS` | `10` | 0–100 | Eine geprüfte Seite gilt bei weniger sicher erkannten Wörtern (≥ 3 Zeichen) als Foto. 0 = nie Foto |
+| `MRC_VECTOR_PAGES` | `true` | | Vektorisierte Scans in ein Bild umwandeln, komprimieren und durchsuchbar machen |
+| `MRC_VECTOR_MIN_ITEMS` | `1000` | 1–100.000 | Eine Seite ohne Bild und Text gilt ab so vielen Zeichenelementen als vektorisierter Scan. Niedrige Werte wandeln auch einfache digitale Zeichnungen um |
+| `MRC_VECTOR_DPI` | `300` | 150–600 | Auflösung für vektorisierte Scans. Höher = Kleingedrucktes schärfer, aber größer und langsamer |
+| **Texterkennung** | | | |
+| `MRC_KEEP_TEXT_LAYER` | `true` | | Vorhandene Textebene übernehmen; `false` = immer neu erkennen (Seiten werden dann auch gedreht und begradigt) |
+| `MRC_ROTATE_CHECK` | `true` | | Ist die Lageerkennung unsicher, schlägt aber eine Drehung vor, wird der Text in beiden Lagen erkannt und nur gedreht, wenn das deutlich mehr Wörter ergibt – hilft bei quer beschriebenen, hochkant gescannten Formularen |
+| `MRC_DESKEW_MIN_ANGLE` | `0.2` | 0–2 | Kleinere Schräglagen (Grad) bleiben, wie sie sind. 0 = jede erkannte Schräglage korrigieren |
+| `MRC_DESKEW_MAX_ANGLE` | `5` | 0,5–45 | Suchbereich ± in Grad. Größer = auch stark schiefe Seiten, aber langsamer. Ein Ergebnis am Rand des Bereichs gilt als unklar und wird nicht korrigiert |
+| `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | 1–3 | Nur begradigen, wenn der beste Winkel deutlich heraussticht. 1 = immer (Logos oder Stempel auf textarmen Seiten können eine gerade Seite kippen); 3 = nur Seiten mit vielen klaren Textzeilen |
+| **Leere Seiten** | | | |
+| `MRC_REMOVE_BLANK_PAGES` | `true` | | Leere gescannte Seiten entfernen |
+| `MRC_BLANK_INK_PERCENT` | `0.005` | 0–1 | Eine Seite ist leer unterhalb dieses Tintenanteils in %. 0 = nie entfernen; eine Seite mit nur einer Seitenzahl hat etwa 0,05 % |
+| `MRC_BLANK_PAPER_PERCENT` | `90` | 0–100 | Eine Seite kann nur leer sein, wenn mindestens dieser Anteil (%) wie Papier aussieht – schützt kontrastarme Fotos (z. B. einer weißen Wand) |
+| **Sonstiges** | | | |
+| `MRC_JOBS` | – | 1–64 | Gleichzeitig verarbeitete Seiten; überschreibt `PAPERLESS_THREADS_PER_WORKER` |
+| `MRC_POPPLER_CHECK` | `true` | | Ergebnis zusätzlich mit Poppler (`pdftoppm`) darstellen und bei Fehlern verwerfen |
+| `MRC_LANGUAGE` | `en` | | Sprache der Log-Meldungen: `en` oder `de` |
+| `MRC_TIMING` | `false` | | Dauer jedes Schritts je Seite ins Log schreiben |
 
-Bewusst **nicht** abschaltbar: digital signierte PDFs bleiben unverändert (sonst wird die Signatur ungültig), und die
-Datei wird nur ersetzt, wenn die Prüfung bestanden ist und das Ergebnis kleiner ist.
+Bewusst **nicht** einstellbar: Digital signierte PDFs bleiben unverändert (die Signatur würde sonst ungültig), und das
+Original wird nur ersetzt, wenn das Ergebnis die Prüfung bestanden hat und kleiner ist.
 
-## Einschränkungen
+## Log-Ausgabe
 
-- **Verlustbehaftet:** Das Original wird ersetzt; es gibt danach nur noch die MRC-Version.
-- **Duplikaterkennung:** Paperless vergleicht die eingehende Datei mit der gespeicherten. Da gespeichert wird, was das Skript
-  erzeugt, erkennt Paperless ein erneut hochgeladenes, byte-identisches Original nicht mehr als Duplikat.
-- **„Erneut verarbeiten“** in Paperless führt das Skript nicht noch einmal aus (die Datei ist ja bereits komprimiert).
-- Anmerkungen (Kommentare, Markierungen) auf gescannten Seiten werden ins Seitenbild übernommen und sind danach
-  nicht mehr bearbeitbar.
-- Seiten mit vorhandener Textebene werden nicht gedreht oder begradigt, weil die Textebene sonst nicht mehr zum Bild passt.
+Meldungen erscheinen im Paperless-Log mit dem Präfix `paperless-mrc:` (standardmäßig Englisch, Deutsch mit
+`MRC_LANGUAGE=de`). Zusätzlich gibt es je Dokument eine maschinenlesbare Zeile:
+
+```
+paperless-mrc-result: {"version": 1, "file": "scan.pdf", "status": "compressed", "reason": "compressed",
+  "size_before": 1482508, "size_after": 46886, "pages": 1, "blank_removed": 1, "photos": 0, "vectorised": 0,
+  "digital": 0, "text_layer": "ocr"}
+```
+
+- `status`: `compressed`, `unchanged` oder `error`
+- `reason`: `compressed`, `not_pdf`, `signed`, `no_scanned_pages`, `mixed_disabled`, `nothing_to_compress`
+  (mit `photos`, `blank`), `not_smaller` (mit Größen), `error` (mit `message`)
+- Größen in Bytes; `text_layer`: `kept`, `ocr` oder `mixed`
+
+## Gut zu wissen
+
+- **Die Komprimierung ist verlustbehaftet:** Das Original wird ersetzt; danach gibt es nur noch die komprimierte
+  Fassung. Wer die Originale unverändert braucht, sollte sie zusätzlich anderswo aufbewahren.
+- **Duplikaterkennung:** Paperless vergleicht die Prüfsumme einer eingehenden Datei mit der gespeicherten. Da die
+  komprimierte Fassung gespeichert ist, erkennt Paperless ein erneut hochgeladenes, identisches Original nicht mehr als
+  Duplikat.
+- **„Erneut verarbeiten“** in Paperless führt paperless-mrc nicht erneut aus (die Datei ist bereits komprimiert).
+- Anmerkungen (Kommentare, Markierungen) auf gescannten Seiten werden ins Bild eingebrannt und sind danach nicht mehr
+  bearbeitbar.
+- Seiten mit vorhandener Textebene werden nicht gedreht oder begradigt, weil die Textebene sonst nicht mehr passt.
 
 ## Entwicklung
 
 ```bash
 uv sync
-uv run pytest                                   # synthetische Testfälle
-PAPERLESS_MRC_TESTFILES=/pfad/zu/scans uv run pytest -k echte   # optional: eigene Scans
+uv run pytest                                                   # synthetische Testdokumente
+PAPERLESS_MRC_TESTFILES=/pfad/zu/scans uv run pytest -k echte    # optional: eigene Scans
 ```
 
-Benötigt `tesseract` (mit `deu`), `opj_compress` (libopenjp2-tools) und `pdftoppm` (poppler-utils; mit `MRC_POPPLER_CHECK=false` nicht nötig).
+Benötigt `tesseract` (mit `deu`), `opj_compress` (libopenjp2-tools) und `pdftoppm` (poppler-utils; mit
+`MRC_POPPLER_CHECK=false` nicht nötig).
 
 ## Lizenz
 
@@ -161,4 +191,4 @@ Die MRC-Kodierung übernehmen [archive-pdf-tools](https://github.com/internetarc
 PDF-Verarbeitung [PyMuPDF](https://github.com/pymupdf/PyMuPDF)/MuPDF von Artifex (AGPL-3.0) und
 [pikepdf](https://github.com/pikepdf/pikepdf) (MPL-2.0), die Texterkennung
 [Tesseract](https://github.com/tesseract-ocr/tesseract) (Apache-2.0). paperless-mrc ist ein unabhängiges Projekt und
-weder mit Paperless-ngx noch mit dem Internet Archive verbunden oder von ihnen unterstützt.
+steht in keiner Verbindung zu Paperless-ngx oder dem Internet Archive.

@@ -94,6 +94,8 @@ MESSAGES = {
                         "DOCUMENT_WORKING_PATH ist nicht gesetzt – nichts zu tun"),
     "error": ("error, document left unchanged: {error}", "Fehler, Dokument bleibt unverändert: {error}"),
     "time": ("{label}: time {clock}", "{label}: Zeit {clock}"),
+    "invalid_setting": ("{name}={value!r} is not a number – using the default {default}",
+                        "{name}={value!r} ist keine Zahl – Standard {default} wird verwendet"),
     "lap_render": ("render", "Rendern"),
     "lap_text_layer": ("text layer", "Textebene"),
     "lap_orientation": ("orientation", "Ausrichtung"),
@@ -118,6 +120,44 @@ def report(name: str, status: str, reason: str, **data) -> None:
     mixed_disabled, nothing_to_compress, not_smaller, error."""
     line = json.dumps({"version": 1, "file": name, "status": status, "reason": reason, **data}, ensure_ascii=False)
     print(f"paperless-mrc-result: {line}", flush=True)
+
+
+# Gültige Bereiche (Minimum, Maximum) der Zahleneinstellungen. Werte außerhalb werden auf den Bereich begrenzt,
+# ungültige (kein Zahlwert) durch den Standard ersetzt. Dieselben Bereiche nutzt die Mac-App.
+RANGES: dict[str, tuple[float, float]] = {
+    "PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD": (0, 100),
+    "MRC_JOBS": (1, 64),
+    "MRC_BLANK_INK_PERCENT": (0, 1),
+    "MRC_BLANK_PAPER_PERCENT": (0, 100),
+    "MRC_BG_DOWNSAMPLE": (1, 4),
+    "MRC_BG_COMPRESSION_RATE": (50, 800),
+    "MRC_DESKEW_MIN_ANGLE": (0, 2),
+    "MRC_DESKEW_MAX_ANGLE": (0.5, 45),
+    "MRC_DESKEW_MIN_CONFIDENCE": (1, 3),
+    "MRC_PHOTO_PAPER_PERCENT": (0, 100),
+    "MRC_PHOTO_MIN_WORDS": (0, 100),
+    "MRC_VECTOR_MIN_ITEMS": (1, 100000),
+    "MRC_VECTOR_DPI": (150, 600),
+    "MRC_MAX_DPI": (0, 1200),  # 0 = aus; sonst mindestens 150 (s. _env_num)
+    "MRC_SHARPEN": (0, 300),
+    "MRC_SHARPEN_RADIUS": (0.5, 5),
+    "MRC_MASK_FACTOR": (0.1, 1),
+}
+
+
+def _env_num(name: str, default: float, cast: type = float, fallback: str | None = None):
+    """Zahl aus der Umgebung (oder aus fallback, z. B. Paperless-Variable), auf RANGES[name] begrenzt."""
+    raw = os.environ.get(name) or (os.environ.get(fallback) if fallback else None)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except ValueError:
+        log(t("invalid_setting", name=name, value=raw, default=default))
+        value = float(default)
+    lo, hi = RANGES[name]
+    value = min(max(value, lo), hi)
+    if name == "MRC_MAX_DPI" and 0 < value < 150:
+        value = 150
+    return cast(round(value)) if cast is int else cast(value)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -170,31 +210,31 @@ class Settings:
             language=os.environ.get("PAPERLESS_OCR_LANGUAGE", "eng"),
             deskew=_env_bool("PAPERLESS_OCR_DESKEW", True),
             rotate=_env_bool("PAPERLESS_OCR_ROTATE_PAGES", True),
-            rotate_threshold=float(os.environ.get("PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD", "12.0")),
+            rotate_threshold=_env_num("PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD", 12.0),
             # MRC_JOBS (eigener Wert) vor PAPERLESS_THREADS_PER_WORKER vor Kerne ÷ Worker
-            jobs=max(int(os.environ.get("MRC_JOBS") or os.environ.get("PAPERLESS_THREADS_PER_WORKER") or default_jobs), 1),
+            jobs=_env_num("MRC_JOBS", default_jobs, int, fallback="PAPERLESS_THREADS_PER_WORKER"),
             remove_blank=_env_bool("MRC_REMOVE_BLANK_PAGES", True),
-            blank_ink_percent=float(os.environ.get("MRC_BLANK_INK_PERCENT", BLANK_INK_PERCENT)),
-            bg_downsample=max(int(os.environ.get("MRC_BG_DOWNSAMPLE", "2")), 1),
-            bg_rate=max(float(os.environ.get("MRC_BG_COMPRESSION_RATE", "200")), 1.0),
+            blank_ink_percent=_env_num("MRC_BLANK_INK_PERCENT", BLANK_INK_PERCENT),
+            bg_downsample=_env_num("MRC_BG_DOWNSAMPLE", 2, int),
+            bg_rate=_env_num("MRC_BG_COMPRESSION_RATE", 200.0),
             fit_a4=_env_bool("MRC_FIT_A4", True),
-            deskew_min=max(float(os.environ.get("MRC_DESKEW_MIN_ANGLE", MIN_SKEW_DEG)), 0.0),
-            deskew_max=min(max(float(os.environ.get("MRC_DESKEW_MAX_ANGLE", "5")), 0.5), 45.0),
-            deskew_confidence=max(float(os.environ.get("MRC_DESKEW_MIN_CONFIDENCE", "1.3")), 1.0),
+            deskew_min=_env_num("MRC_DESKEW_MIN_ANGLE", MIN_SKEW_DEG),
+            deskew_max=_env_num("MRC_DESKEW_MAX_ANGLE", 5.0),
+            deskew_confidence=_env_num("MRC_DESKEW_MIN_CONFIDENCE", 1.3),
             skip_photos=_env_bool("MRC_SKIP_PHOTOS", True),
-            photo_paper_percent=float(os.environ.get("MRC_PHOTO_PAPER_PERCENT", "50")),
-            photo_min_words=max(int(os.environ.get("MRC_PHOTO_MIN_WORDS", "10")), 0),
-            blank_paper_percent=float(os.environ.get("MRC_BLANK_PAPER_PERCENT", "90")),
+            photo_paper_percent=_env_num("MRC_PHOTO_PAPER_PERCENT", 50.0),
+            photo_min_words=_env_num("MRC_PHOTO_MIN_WORDS", 10, int),
+            blank_paper_percent=_env_num("MRC_BLANK_PAPER_PERCENT", 90.0),
             vector_pages=_env_bool("MRC_VECTOR_PAGES", True),
-            vector_min_items=max(int(os.environ.get("MRC_VECTOR_MIN_ITEMS", "1000")), 1),
-            vector_dpi=min(max(int(os.environ.get("MRC_VECTOR_DPI", "300")), 72), 1200),
+            vector_min_items=_env_num("MRC_VECTOR_MIN_ITEMS", 1000, int),
+            vector_dpi=_env_num("MRC_VECTOR_DPI", 300, int),
             mixed_pdfs=_env_bool("MRC_MIXED_PDFS", True),
             keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
             rotate_check=_env_bool("MRC_ROTATE_CHECK", True),
-            max_dpi=max(int(os.environ.get("MRC_MAX_DPI", "0")), 0),
-            sharpen=max(int(os.environ.get("MRC_SHARPEN", "150")), 0),
-            mask_sensitivity=min(max(float(os.environ.get("MRC_MASK_FACTOR", "0.5")), 0.1), 2.0),
-            sharpen_radius=max(float(os.environ.get("MRC_SHARPEN_RADIUS", "1.5")), 0.1),
+            max_dpi=_env_num("MRC_MAX_DPI", 0, int),
+            sharpen=_env_num("MRC_SHARPEN", 150, int),
+            mask_sensitivity=_env_num("MRC_MASK_FACTOR", 0.5),
+            sharpen_radius=_env_num("MRC_SHARPEN_RADIUS", 1.5),
             timing=_env_bool("MRC_TIMING", False),
             poppler_check=_env_bool("MRC_POPPLER_CHECK", True),
         )
