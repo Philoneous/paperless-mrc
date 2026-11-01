@@ -27,6 +27,7 @@ class Paperless:
         self.next_id = 100
         self.calls: list[str] = []
         self.tasks: dict[str, int] = {}  # TASK_ID → angelegtes Dokument
+        self.ui_language = ""  # in Paperless gewählte Sprache des Benutzers ("" = Browsersprache)
         self.fail_bulk_edit = 0  # so viele bulk_edit-Aufrufe scheitern lassen
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -93,10 +94,15 @@ class Paperless:
                 api.calls.append(f"GET {url.path}")
                 if url.path == "/api/custom_fields/":
                     return self._send(200, self._page(api.fields, query))
+                if url.path == "/api/ui_settings/":
+                    return self._send(200, {"user": {"id": 1}, "settings": {"language": api.ui_language},
+                                            "permissions": []})
                 if url.path == "/api/tasks/":  # API v10: seitenweise, related_document_ids
                     task_id = query.get("task_id", [""])[0]
-                    items = [{"task_id": task_id, "status": "success", "related_document_ids": [api.tasks[task_id]]}
-                             ] if task_id in api.tasks else []
+                    doc_id = api.tasks.get(task_id)
+                    items = [] if task_id not in api.tasks else [
+                        {"task_id": task_id, "status": "success" if doc_id else "failure",
+                         "related_document_ids": [doc_id] if doc_id else []}]
                     return self._send(200, self._page(items, query))
                 if url.path == "/api/documents/":
                     docs = list(api.docs.values())

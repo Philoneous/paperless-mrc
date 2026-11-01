@@ -2,6 +2,7 @@
 """Original aufbewahren (MRC_KEEP_ORIGINAL) gegen eine nachgebaute Paperless-API (tests/paperless_api.py)."""
 
 import hashlib
+import json
 from dataclasses import replace
 
 import pytest
@@ -202,3 +203,59 @@ def test_feld_wird_nachgesetzt_ohne_zweiten_upload(tmp_path, rng, env, monkeypat
     assert counts["attached"] == 0 and counts["released"] == 1
     assert len(doc["versions"]) == 2  # kein zweites Original
     assert doc["custom_fields"] == [{"field": server.fields[0]["id"], "value": "mrc-auto"}]
+
+
+@pytest.mark.parametrize("mrc_language, ui_language, first_label", [
+    ("", "de-de", "Löschen nach 30 Tagen"),   # folgt der in Paperless gewählten Sprache
+    ("", "", "Delete after 30 days"),         # Browsersprache: für den Server unbekannt → Englisch
+    ("en", "de-de", "Delete after 30 days"),  # MRC_LANGUAGE hat Vorrang
+    ("de", "en-us", "Löschen nach 30 Tagen"),
+])
+def test_feldsprache(env, monkeypatch, mrc_language, ui_language, first_label):
+    hold, server = env
+    monkeypatch.setenv("MRC_LANGUAGE", mrc_language)
+    server.ui_language = ui_language
+    originals.ensure_field(originals.Api.from_env())
+    assert server.fields[0]["extra_data"]["select_options"][0]["label"] == first_label
+
+
+def test_ersetzen_scheitert_ablage_wird_zurueckgenommen(tmp_path, rng, env, monkeypatch):
+    hold, server = env
+    path = write_scan_pdf(tmp_path / "brief.pdf", [letter_page(rng)])
+    before = path.read_bytes()
+
+    def broken_replace(src, dst):
+        raise OSError("Datenträger voll")
+    monkeypatch.setattr(mrc.os, "replace", broken_replace)
+    with pytest.raises(OSError):
+        mrc.process(path, KEEP)
+    assert path.read_bytes() == before
+    assert list(hold.iterdir()) == []  # keine verwaiste Ablage, kein Rest der Zwischendatei
+    assert not path.with_name(path.name + ".mrc-tmp").exists()
+
+
+def test_gescheiterte_aufgabe_wird_einmal_gemeldet(tmp_path, rng, env, capsys):
+    hold, server = env
+    path = write_scan_pdf(tmp_path / "brief.pdf", [letter_page(rng)])
+    mrc.process(path, KEEP)
+    server.tasks["task-1"] = None  # Paperless hat die Verarbeitung abgebrochen
+    capsys.readouterr()
+    originals.cleanup(originals.Api.from_env())
+    originals.cleanup(originals.Api.from_env())
+    assert capsys.readouterr().out.count("never attached") == 1
+    assert (hold / "task-1.pdf").exists()  # Original bleibt für den Nutzer liegen
+
+
+def test_geloeschtes_dokument_kopie_bleibt_innerhalb_der_frist(tmp_path, rng, env, monkeypatch):
+    hold, server = env
+    server.consume_hook = None
+    consume(tmp_path, rng, server)
+    monkeypatch.setenv("DOCUMENT_ID", "7")
+    originals.post_consume()
+    del server.docs[7]  # in Paperless gelöscht (Papierkorb)
+    assert originals.cleanup(originals.Api.from_env())["released"] == 0
+    assert (hold / "task-1.pdf").exists()
+    meta = json.loads((hold / "task-1.json").read_text())
+    meta["uploaded"] -= 31 * 86400
+    (hold / "task-1.json").write_text(json.dumps(meta))
+    assert originals.cleanup(originals.Api.from_env())["released"] == 1

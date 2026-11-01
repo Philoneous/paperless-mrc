@@ -40,7 +40,7 @@ A normal scan stores every page as one large photo; MRC only keeps the detail wh
 
 1. **Only scanned pages are touched.** A page counts as scanned if it consists of a single page image without visible
    text. Digital pages (e.g. a generated cover letter in front of a scan), bookmarks and metadata stay exactly as they
-   are. Purely digital PDFs, **digitally signed PDFs** and uploaded images (JPEG, PNG …) are not changed at all.
+   are. Purely digital PDFs, **digitally signed or encrypted PDFs** and uploaded images (JPEG, PNG …) are not changed at all.
    - **Photos stay as they are**, because MRC would visibly degrade them. A page that is mostly paper counts as a
      document; for all other pages (photos, but also forms with shaded boxes) text recognition decides.
    - **Vectorized scans** – some scanner software stores a page as thousands of drawing elements instead of an image –
@@ -81,7 +81,8 @@ The installer
 - stops if a different pre-consume script is already configured,
 - restarts `paperless-task-queue` and `paperless-consumer`.
 
-**Update:** run the same command again. **Uninstall:** remove the line `PAPERLESS_PRE_CONSUME_SCRIPT=…` from
+The installer's messages are in English; for German, put `MRC_LANGUAGE=de` in `paperless.conf` or in front of the
+command (`MRC_LANGUAGE=de bash -c "…"`). **Update:** run the same command again. **Uninstall:** remove the line `PAPERLESS_PRE_CONSUME_SCRIPT=…` from
 `paperless.conf` and restart both services.
 
 ## Optional: keep the original until you have checked it
@@ -99,6 +100,9 @@ the original as a second **version** of the document (Paperless-ngx 3 or later) 
   | **Keep** | The original stays permanently – e.g. if the compressed version is not good enough |
   | **Delete now** | The original is deleted within the hour – typically after you have checked the document |
 
+- The choices are labelled in the language selected in Paperless (*Settings → Language* of the user whose API token
+  is used); if it is set to the browser language, which the server cannot know, they are in English. `MRC_LANGUAGE`
+  overrides this.
 - After deletion only the small compressed file remains and the field disappears, so filtering the document list by
   *Original (MRC)* shows exactly the documents that still have an original (handy as a saved view for reviewing).
 - An hourly timer (`paperless-mrc-cleanup`) does the deleting. It only deletes in clear cases; an unknown value, or a
@@ -199,7 +203,7 @@ paperless-mrc-result: {"version": 1, "file": "scan.pdf", "status": "compressed",
 ```
 
 - `status`: `compressed`, `unchanged` or `error`
-- `reason`: `compressed`, `not_pdf`, `signed`, `no_scanned_pages`, `mixed_disabled`, `nothing_to_compress`
+- `reason`: `compressed`, `not_pdf`, `signed`, `encrypted`, `original_version`, `no_scanned_pages`, `mixed_disabled`, `nothing_to_compress`
   (with `photos`, `blank`), `not_smaller` (with sizes), `error` (with `message`)
 - sizes in bytes; `text_layer`: `kept`, `ocr` or `mixed`
 

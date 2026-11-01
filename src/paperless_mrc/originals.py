@@ -44,13 +44,24 @@ LABELS = {
 }
 
 
-def _german() -> bool:
-    return os.environ.get("MRC_LANGUAGE", "en").strip().lower().startswith("de")
+def german(api: Api | None = None) -> bool:
+    """Sprache der Feldbeschriftung: MRC_LANGUAGE, wenn gesetzt; sonst die in Paperless gewählte Sprache des
+    Token-Benutzers (ui_settings.language, z. B. „de-de“; leer = Browsersprache, für den Server unbekannt);
+    sonst Englisch."""
+    explicit = os.environ.get("MRC_LANGUAGE", "").strip().lower()
+    if explicit:
+        return explicit.startswith("de")
+    if api is not None:
+        try:
+            language = ((api.request("GET", "ui_settings/") or {}).get("settings") or {}).get("language") or ""
+        except Exception:
+            language = ""
+        return str(language).lower().startswith("de")
+    return False
 
 
-def options(days: int) -> list[dict]:
-    lang = 1 if _german() else 0
-    return [{"id": i, "label": LABELS[i][lang].format(days=days)} for i in (AUTO, KEEP, DELETE)]
+def options(days: int, de: bool = False) -> list[dict]:
+    return [{"id": i, "label": LABELS[i][1 if de else 0].format(days=days)} for i in (AUTO, KEEP, DELETE)]
 
 
 def enabled() -> bool:
@@ -87,13 +98,20 @@ def hold(path: Path, task_id: str) -> None:
     if not task_id:
         raise RuntimeError("TASK_ID fehlt – Original kann nicht zugeordnet werden")
     folder = hold_dir()
-    folder.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)  # Originale nur für den Dienstbenutzer lesbar
     target = folder / f"{task_id}.pdf"
     shutil.copyfile(path, target)
     if sha256(target) != sha256(path):
         raise RuntimeError("Kopie des Originals fehlerhaft")
     meta = {"name": path.name, "sha256": sha256(target), "held": _now()}
     (folder / f"{task_id}.json").write_text(json.dumps(meta))
+
+
+def release(task_id: str) -> None:
+    """Ablage eines Auftrags zurücknehmen (die Arbeitskopie wurde doch nicht ersetzt)."""
+    folder = hold_dir()
+    for leftover in (folder / f"{task_id}.pdf", folder / f"{task_id}.json"):
+        leftover.unlink(missing_ok=True)
 
 
 def is_own_upload(path: Path) -> bool:
@@ -169,7 +187,7 @@ def find_field(api: Api) -> dict | None:
 
 def ensure_field(api: Api) -> int:
     """Auswahlfeld anlegen bzw. die Beschriftung an Frist und Sprache anpassen; gibt die id zurück."""
-    wanted = options(days())
+    wanted = options(days(), german(api))
     field = find_field(api)
     if field is None:
         field = api.request("POST", "custom_fields/", {"name": FIELD_NAME, "data_type": "select",
@@ -258,15 +276,18 @@ def _age_days(added: str) -> float:
     return (datetime.now(timezone.utc) - stamp).total_seconds() / 86400
 
 
-def document_of_task(api: Api, task_id: str) -> int | None:
-    """Dokument, das eine Paperless-Aufgabe angelegt hat (API v10+: related_document_ids, v9: related_document)."""
+def document_of_task(api: Api, task_id: str) -> tuple[int | None, bool]:
+    """Dokument, das eine Paperless-Aufgabe angelegt hat (API v10+: related_document_ids, v9: related_document),
+    und ob die Aufgabe gescheitert ist."""
     found = api.request("GET", f"tasks/?task_id={urllib.parse.quote(task_id)}")
     items = found.get("results", []) if isinstance(found, dict) else found or []
     for item in items:
         ids = item.get("related_document_ids") or ([item["related_document"]] if item.get("related_document") else [])
         if ids:
-            return int(ids[0])
-    return None
+            return int(ids[0]), False
+        if str(item.get("status", "")).lower() == "failure":
+            return None, True
+    return None, False
 
 
 def cleanup(api: Api) -> dict:
@@ -285,22 +306,28 @@ def cleanup(api: Api) -> dict:
     for meta_file, meta in held:
         task_id = meta_file.stem
         if "doc_id" not in meta:
+            if meta.get("orphan"):
+                continue  # schon gemeldet; die Datei bleibt für den Nutzer liegen
             # Nicht angehängt (z. B. Token fehlte oder Paperless war nicht erreichbar): Dokument über die
             # Aufgabe suchen und nachholen
-            doc_id = document_of_task(api, task_id)
+            doc_id, failed = document_of_task(api, task_id)
             if doc_id is not None:
                 attach(api, task_id, doc_id)
                 counts["attached"] += 1
                 pending_docs.add(doc_id)
-            elif _now() - meta["held"] > CONFIRM_WARN_HOURS * 3600:
+            elif failed or _now() - meta["held"] > CONFIRM_WARN_HOURS * 3600:
                 log(t("original_orphan", file=folder / f"{task_id}.pdf"))
+                meta["orphan"] = True  # nur einmal melden
+                meta_file.write_text(json.dumps(meta))
             continue
         try:
             doc = api.request("GET", f"documents/{meta['doc_id']}/")
         except RuntimeError as exc:
             if "HTTP 404" not in str(exc):
                 raise
-            doc = None  # Dokument in Paperless gelöscht
+            doc = None  # Dokument in Paperless gelöscht (evtl. im Papierkorb)
+            if _now() - meta["uploaded"] < days() * 86400:
+                continue  # Kopie behalten, solange das Dokument wiederhergestellt werden könnte
         if doc is not None and not any(v["checksum"] == meta["sha256"] and not v["is_root"]
                                        for v in doc.get("versions", [])):
             pending_docs.add(meta["doc_id"])

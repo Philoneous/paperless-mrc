@@ -40,6 +40,8 @@ import pikepdf
 import pymupdf
 from PIL import Image, ImageFilter
 
+from paperless_mrc import originals
+
 A4 = (595.28, 841.89)  # pt
 A3_WIDTH = 841.89  # pt; ist die kürzere Seite größer, ist die Seitengröße offensichtlich falsch
 BLANK_INK_PERCENT = 0.005  # nur wirklich leere Seiten (eine Seitenzahl liegt bei ca. 0,05 %)
@@ -57,6 +59,8 @@ MESSAGES = {
     "signed": ("{name}: digitally signed – unchanged so the signature stays valid",
                "{name}: digital signiert – unverändert, damit die Signatur gültig bleibt"),
     "no_scanned_pages": ("{name}: no scanned pages – unchanged", "{name}: keine gescannten Seiten – unverändert"),
+    "encrypted": ("{name}: encrypted/protected – unchanged so the protection stays",
+                  "{name}: verschlüsselt/geschützt – unverändert, damit der Schutz erhalten bleibt"),
     "mixed_disabled": ("{name}: contains non-scanned pages – unchanged (MRC_MIXED_PDFS off)",
                        "{name}: enthält nicht gescannte Seiten – unverändert (MRC_MIXED_PDFS aus)"),
     "nothing_to_compress": ("{name}: no page to compress ({photos} photo, {blank} blank) – unchanged",
@@ -140,7 +144,7 @@ def t(key: str, **values) -> str:
 def report(name: str, status: str, reason: str, **data) -> None:
     """Maschinenlesbare Ergebniszeile (eine je Dokument, unabhängig von MRC_LANGUAGE), z. B. für die Mac-App.
     status: compressed | unchanged | error; reason: compressed, not_pdf, signed, no_scanned_pages,
-    mixed_disabled, nothing_to_compress, not_smaller, error."""
+    mixed_disabled, encrypted, original_version, nothing_to_compress, not_smaller, error."""
     line = json.dumps({"version": 1, "file": name, "status": status, "reason": reason, **data}, ensure_ascii=False)
     print(f"paperless-mrc-result: {line}", flush=True)
 
@@ -320,7 +324,7 @@ def ink_percent(page: pymupdf.Page) -> float:
     # lokaler Papierton: Median auf 1/4 der Auflösung (wie Fenster 31 px bei voller), dann zurückskaliert
     paper = gray.reduce(4).filter(ImageFilter.MedianFilter(7)).resize(gray.size, Image.BILINEAR)
     ink = (np.asarray(paper, np.int16) - np.asarray(gray, np.int16)) > 40
-    m_y, m_x = int(0.02 * ink.shape[0]), int(0.02 * ink.shape[1])
+    m_y, m_x = max(int(0.02 * ink.shape[0]), 1), max(int(0.02 * ink.shape[1]), 1)
     return float(ink[m_y:-m_y, m_x:-m_x].mean() * 100)
 
 
@@ -636,7 +640,6 @@ def process(path: Path, settings: Settings) -> None:
         log(t("not_pdf", name=path.name))
         report(path.name, "unchanged", "not_pdf")
         return
-    from paperless_mrc import originals
     if originals.is_own_upload(path):  # auch bei inzwischen abgeschalteter Option: nie das Original komprimieren
         log(t("own_version", name=path.name))
         report(path.name, "unchanged", "original_version")
@@ -646,6 +649,10 @@ def process(path: Path, settings: Settings) -> None:
         if doc.get_sigflags() > 0:
             log(t("signed", name=path.name))
             report(path.name, "unchanged", "signed")
+            return
+        if doc.metadata.get("encryption"):  # pikepdf würde Schutz und Rechtebeschränkungen beim Speichern entfernen
+            log(t("encrypted", name=path.name))
+            report(path.name, "unchanged", "encrypted")
             return
         pages = doc.page_count
         scans = [i for i, page in enumerate(doc) if is_scan_page(page)]
@@ -705,13 +712,19 @@ def process(path: Path, settings: Settings) -> None:
             log(t("not_smaller", name=path.name, size_after=size_after // 1024))
             report(path.name, "unchanged", "not_smaller", size_before=size_before, size_after=size_after)
             return
+        task_id = os.environ.get("TASK_ID", "")
         if settings.keep_original:
-            from paperless_mrc import originals
-            originals.hold(path, os.environ.get("TASK_ID", ""))  # wirft bei Fehlern: Datei bleibt unverändert
+            originals.hold(path, task_id)  # wirft bei Fehlern: Datei bleibt unverändert
             log(t("original_held", name=path.name))
         staged = path.with_name(path.name + ".mrc-tmp")
-        shutil.copyfile(out, staged)
-        os.replace(staged, path)
+        try:
+            shutil.copyfile(out, staged)
+            os.replace(staged, path)
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            if settings.keep_original:  # Paperless speichert dann das Original selbst – Ablage zurücknehmen
+                originals.release(task_id)
+            raise
 
     source = "kept" if all(text_kept) else "ocr" if not any(text_kept) else "mixed"
     vectorised = len([i for i in vectors if i in coded])

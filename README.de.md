@@ -40,7 +40,7 @@ Ein normaler Scan speichert jede Seite als ein großes Foto; MRC behält die Det
 
 1. **Nur gescannte Seiten werden bearbeitet.** Eine Seite gilt als gescannt, wenn sie aus einem einzigen Seitenbild
    ohne sichtbaren Text besteht. Digitale Seiten (z. B. ein erzeugtes Anschreiben vor einem Scan), Lesezeichen und
-   Metadaten bleiben genau so, wie sie sind. Rein digitale PDFs, **digital signierte PDFs** und hochgeladene Bilder
+   Metadaten bleiben genau so, wie sie sind. Rein digitale PDFs, **digital signierte oder verschlüsselte PDFs** und hochgeladene Bilder
    (JPEG, PNG …) bleiben ganz unverändert.
    - **Fotos bleiben, wie sie sind**, weil MRC sie sichtbar verschlechtern würde. Eine Seite, die überwiegend aus
      Papier besteht, gilt als Dokument; bei allen anderen (Fotos, aber auch Formulare mit grau hinterlegten Feldern)
@@ -83,7 +83,8 @@ Der Installer
 - bricht ab, wenn dort schon ein anderes Pre-Consume-Skript eingetragen ist,
 - startet `paperless-task-queue` und `paperless-consumer` neu.
 
-**Aktualisieren:** denselben Befehl erneut ausführen. **Entfernen:** die Zeile `PAPERLESS_PRE_CONSUME_SCRIPT=…` aus
+Der Installer meldet sich auf Englisch; für Deutsch `MRC_LANGUAGE=de` in `paperless.conf` eintragen oder vor den
+Befehl setzen (`MRC_LANGUAGE=de bash -c "…"`). **Aktualisieren:** denselben Befehl erneut ausführen. **Entfernen:** die Zeile `PAPERLESS_PRE_CONSUME_SCRIPT=…` aus
 `paperless.conf` löschen und beide Dienste neu starten.
 
 ## Optional: Original bis zur Prüfung aufbewahren
@@ -101,6 +102,9 @@ Original als zweite **Version** des Dokuments aufbewahren lassen (ab Paperless-n
   | **Behalten** | Das Original bleibt dauerhaft – z. B. wenn die komprimierte Fassung nicht gut genug ist |
   | **Jetzt löschen** | Das Original wird innerhalb einer Stunde gelöscht – typischerweise nach deiner Prüfung |
 
+- Die Auswahl ist in der Sprache beschriftet, die in Paperless gewählt ist (*Einstellungen → Sprache* des Benutzers,
+  dessen API-Token verwendet wird); steht sie auf „Browsersprache“, die der Server nicht kennen kann, auf Englisch.
+  `MRC_LANGUAGE` hat Vorrang.
 - Nach dem Löschen bleibt nur die kleine komprimierte Datei, und das Feld verschwindet. Filtert man die Dokumentliste
   nach *Original (MRC)*, sieht man also genau die Dokumente, die noch ein Original haben (praktisch als gespeicherte
   Ansicht zum Prüfen).
@@ -203,7 +207,7 @@ paperless-mrc-result: {"version": 1, "file": "scan.pdf", "status": "compressed",
 ```
 
 - `status`: `compressed`, `unchanged` oder `error`
-- `reason`: `compressed`, `not_pdf`, `signed`, `no_scanned_pages`, `mixed_disabled`, `nothing_to_compress`
+- `reason`: `compressed`, `not_pdf`, `signed`, `encrypted`, `original_version`, `no_scanned_pages`, `mixed_disabled`, `nothing_to_compress`
   (mit `photos`, `blank`), `not_smaller` (mit Größen), `error` (mit `message`)
 - Größen in Bytes; `text_layer`: `kept`, `ocr` oder `mixed`
 

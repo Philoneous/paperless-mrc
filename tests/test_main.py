@@ -521,3 +521,15 @@ def test_einstellungen_begrenzt_und_robust(monkeypatch, capsys):
                         "bg_downsample", "MRC_BG_COMPRESSION_RATE": "bg_rate", "MRC_VECTOR_DPI": "vector_dpi"}.items():
         lo, hi = mrc.RANGES[name]
         assert lo <= getattr(s, field) <= hi
+
+
+def test_verschluesselte_pdf_bleibt_unveraendert(tmp_path, rng):
+    """pikepdf würde beim Speichern Schutz und Rechtebeschränkungen entfernen."""
+    plain = write_scan_pdf(tmp_path / "offen.pdf", [letter_page(rng)])
+    path = tmp_path / "geschuetzt.pdf"
+    with pymupdf.open(plain) as doc:
+        doc.save(path, encryption=pymupdf.PDF_ENCRYPT_AES_256, owner_pw="owner", user_pw="",
+                 permissions=pymupdf.PDF_PERM_PRINT)
+    before = path.read_bytes()
+    mrc.process(path, SETTINGS)
+    assert path.read_bytes() == before
