@@ -170,6 +170,12 @@ paperless-mrc-result: {"version": 1, "file": "scan.pdf", "status": "compressed",
   bearbeitbar.
 - Seiten mit vorhandener Textebene werden nicht gedreht oder begradigt, weil die Textebene sonst nicht mehr passt.
 
+## Unterstützen
+
+paperless-mrc ist kostenlos. Wenn es dir Zeit oder Speicherplatz spart, kannst du die Entwicklung auf
+[Ko-fi](https://ko-fi.com/Philoneous) unterstützen (PayPal oder Karte, kein Konto nötig) – auch über den
+*Sponsor*-Knopf oben auf dieser Seite. Beiträge sind freiwillig und keine steuerlich absetzbaren Spenden.
+
 ## Entwicklung
 
 ```bash

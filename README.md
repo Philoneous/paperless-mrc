@@ -166,6 +166,12 @@ paperless-mrc-result: {"version": 1, "file": "scan.pdf", "status": "compressed",
 - Annotations (comments, highlights) on scanned pages are burned into the image and can no longer be edited.
 - Pages with an existing text layer are not rotated or straightened, because the text layer would no longer match.
 
+## Support
+
+paperless-mrc is free. If it saves you time or storage, you can support its development on
+[Ko-fi](https://ko-fi.com/Philoneous) (PayPal or card, no account needed) – also via the *Sponsor* button at the top of
+this page. Contributions are voluntary and not tax-deductible donations.
+
 ## Development
 
 ```bash
