@@ -37,6 +37,8 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: astral-sh/setup-uv@v7
+        with:
+          cache-suffix: ${{ matrix.deps }}
 
       - name: Dependencies (${{ matrix.deps }})
         run: |
