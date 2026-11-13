@@ -604,3 +604,17 @@ def test_run_meldet_fehler_wie_subprocess(tmp_path):
         mrc.run("sh", "-c", "echo kaputt >&2; exit 3")
     assert err.value.returncode == 3 and "kaputt" in err.value.stderr
     assert mrc.run("sh", "-c", "echo ok").stdout == "ok\n"
+
+
+def test_laeuft_ohne_fitz_modul(tmp_path, rng, monkeypatch):
+    """archive-pdf-tools importiert `fitz`; PyMuPDF will den Namen entfernen. Simuliert: `import fitz` scheitert."""
+    blocker = tmp_path / "block"
+    (blocker / "fitz").mkdir(parents=True)
+    (blocker / "fitz" / "__init__.py").write_text('raise ImportError("fitz entfernt (Test)")\n')
+    monkeypatch.setenv("PYTHONPATH", f"{blocker}{os.pathsep}{os.environ.get('PYTHONPATH', '')}")
+    # beide Werkzeuge: ohne Textebene recode_pdf, mit Textebene zusätzlich pdf-to-hocr
+    path = write_scan_pdf(tmp_path / "ohne_fitz.pdf", [letter_page(rng)], invisible_text=["Zauberwort4711"])
+    size_before = path.stat().st_size
+    mrc.process(path, SETTINGS)
+    assert path.stat().st_size < size_before / 3
+    assert "Zauberwort4711" in text_of(path)

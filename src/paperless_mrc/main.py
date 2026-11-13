@@ -533,7 +533,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
         if photo_check and sum(sum(c.isalnum() for c in w) >= 3 for w in words) < settings.photo_min_words:
             log(t("photo_text_layer", label=label))
             return None, has_text
-        hocr = run("pdf-to-hocr", "-f", page_pdf, "-J", meta_file).stdout
+        hocr = run(sys.executable, "-m", "paperless_mrc.compat", "pdf-to-hocr", "-f", page_pdf, "-J", meta_file).stdout
         save(image)
         clock.lap(t("lap_text_layer"))
     else:

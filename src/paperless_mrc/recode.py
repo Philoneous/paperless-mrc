@@ -9,23 +9,21 @@ kleiner = empfindlicher, auch hellgraue Striche landen in der Maske statt im ver
 Hintergrund. 1 = unverändert.
 """
 
-import runpy
-import shutil
 import sys
-from pathlib import Path
+
+from paperless_mrc.compat import provide_fitz, run_tool
 
 
 def main() -> None:
     factor = float(sys.argv.pop(1))
+    provide_fitz()  # vor dem Laden von internetarchivepdf, siehe compat.py
     if factor != 1.0:
         import internetarchivepdf.mrc as mrc
 
         original = getattr(mrc, "threshold_image", None)
         if original is not None:  # bei anderer archive-pdf-tools-Version: unverändert weiter
             mrc.threshold_image = lambda img, dpi, k=0.34: original(img, dpi, k * factor)
-    script = Path(sys.executable).parent / "recode_pdf"
-    sys.argv[0] = str(script if script.exists() else shutil.which("recode_pdf"))
-    runpy.run_path(sys.argv[0], run_name="__main__")
+    run_tool("recode_pdf", sys.argv[1:])
 
 
 if __name__ == "__main__":
