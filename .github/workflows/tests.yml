@@ -1,0 +1,52 @@
+# Tests auf Debian 13 (wie der Paperless-LXC der community-scripts), zweimal:
+#  - locked: genau die Paketversionen aus uv.lock
+#  - latest: frisch aufgelöste, neueste erlaubte Versionen – so, wie install.sh sie auf dem Server installiert.
+# Der wöchentliche Lauf meldet damit Brüche durch neue Versionen von PyMuPDF, pikepdf, archive-pdf-tools
+# usw., bevor ein Update sie auf den Server bringt.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"  # montags 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.deps }})
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        deps: [locked, latest]
+    steps:
+      - name: System packages (wie install.sh)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git \
+            tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng \
+            libopenjp2-tools poppler-utils jbig2 fonts-dejavu-core
+
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Dependencies (${{ matrix.deps }})
+        run: |
+          if [ "${{ matrix.deps }}" = latest ]; then
+            uv sync --python 3.13 --upgrade
+          else
+            uv sync --python 3.13 --locked
+          fi
+          uv pip list | grep -iE '^(pymupdf|pikepdf|archive-pdf-tools|archive-hocr-tools|numpy|pillow|scikit-image|scipy) '
+          tesseract --version | head -1
+
+      - name: Tests
+        run: uv run --no-sync pytest -q -W error::FutureWarning
