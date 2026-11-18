@@ -42,7 +42,7 @@ class Paperless:
 
     def add_document(self, doc_id: int, path: Path, task_id: str = "task-1") -> dict:
         self.tasks[task_id] = doc_id
-        doc = {"id": doc_id, "custom_fields": [], "versions": [
+        doc = {"id": doc_id, "custom_fields": [], "notes": [], "versions": [
             {"id": doc_id, "added": _iso(datetime.now(timezone.utc)), "version_label": None,
              "checksum": hashlib.sha256(path.read_bytes()).hexdigest(), "is_root": True}]}
         self.docs[doc_id] = doc
@@ -152,6 +152,14 @@ class Paperless:
                             doc = api.docs[doc_id]
                             doc["custom_fields"] = [cf for cf in doc["custom_fields"] if cf["field"] != int(fid)]
                     return self._send(200, {"result": "OK"})
+                m = re.fullmatch(r"/api/documents/(\d+)/notes/", path)
+                if m and int(m.group(1)) in api.docs:  # Antwort wie Paperless: alle Notizen des Dokuments
+                    note = json.loads(body).get("note")
+                    if not note:
+                        return self._send(400, {"error": "Note text is required"})
+                    doc = api.docs[int(m.group(1))]
+                    doc["notes"].append({"id": api._id(), "note": note})
+                    return self._send(200, doc["notes"])
                 m = re.fullmatch(r"/api/documents/(\d+)/update_version/", path)
                 if m and int(m.group(1)) in api.docs:
                     msg = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(

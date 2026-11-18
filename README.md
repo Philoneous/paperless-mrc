@@ -93,6 +93,33 @@ only asks about options that have been added since your last setup (none → no 
 settings again. **Without questions** (e.g. in scripts): `MRC_YES=1 bash -c "…"` keeps the existing settings.
 **Uninstall:** remove the line `PAPERLESS_PRE_CONSUME_SCRIPT=…` from `paperless.conf` and restart both services.
 
+## Note on each document
+
+Each compressed document gets a short note in Paperless (*Notes* tab) that lists what was done to the file:
+
+```
+**paperless-mrc** · 2026-11-18 14:32
+
+- Compressed: 4.8 MB → 412 KB (−92 %)
+- Pages: 5 → 4
+- Blank pages removed: 5
+- Rotated: page 3 (180°)
+- Straightened: page 1 (+1.2°)
+- Text layer: recognised with Tesseract (deu+eng)
+- Duration: 38 s
+
+_Page numbers refer to the uploaded file._
+```
+
+Paperless-ngx 3.5 and later shows the note formatted (Markdown); older versions show the text as it is. The language
+follows the Paperless user of the API token, as for the field described below (`MRC_LANGUAGE` overrides it). Documents
+that are left unchanged only get a note with the reason if `MRC_NOTE_UNCHANGED=true`; errors are always noted.
+
+The note needs an API token (create it in Paperless under *My Profile*; the installer asks for it). It is written by
+the post-consume script, which the installer sets up together with the folder `/opt/paperless-mrc/notes`. Without a
+token, or if a different post-consume script is already configured, there is simply no note – compression works as
+before. **Switch off:** `MRC_NOTE=false`.
+
 ## Optional: keep the original until you have checked it
 
 Normally the compressed file replaces the original. If you would rather check the result first, paperless-mrc can keep
@@ -187,10 +214,13 @@ number) is replaced by the default and reported in the log.
 | `MRC_POPPLER_CHECK` | `true` | | Also render the result with Poppler (`pdftoppm`) and discard it on errors |
 | `MRC_LANGUAGE` | `en` | | Language of the log messages: `en` or `de` |
 | `MRC_TIMING` | `false` | | Log the time each step takes per page |
+| **Note on the document** | | | |
+| `MRC_NOTE` | `true` | | Add a note listing what was done to the file (needs `MRC_API_TOKEN`) |
+| `MRC_NOTE_UNCHANGED` | `false` | | Also add a note with the reason when a document is left unchanged |
 | **Keep the original (optional)** | | | |
 | `MRC_KEEP_ORIGINAL` | `false` | | Keep the original as a version until you have checked it (see above) |
 | `MRC_KEEP_ORIGINAL_DAYS` | `30` | 1–3650 | Default period after which the original is deleted |
-| `MRC_API_TOKEN` | – | | Paperless API token (from *My Profile*), needed to attach and delete versions |
+| `MRC_API_TOKEN` | – | | Paperless API token (from *My Profile*), needed for the note and to attach and delete versions |
 | `MRC_API_URL` | `http://localhost:8000` | | Address of the Paperless API from inside the container (port from `PAPERLESS_PORT`) |
 | `MRC_ORIGINALS_DIR` | `/opt/paperless-mrc/originals` | | Where originals wait until they are attached |
 

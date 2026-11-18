@@ -41,7 +41,7 @@ import pikepdf
 import pymupdf
 from PIL import Image, ImageFilter
 
-from paperless_mrc import originals
+from paperless_mrc import notes, originals
 
 A4 = (595.28, 841.89)  # pt
 PAGE_SIZES = {"a4": A4, "letter": (612.0, 792.0), "legal": (612.0, 1008.0)}  # Ziele für MRC_FIT_PAGE_SIZE (pt)
@@ -135,6 +135,11 @@ MESSAGES = {
                         "{name}={value!r} ist keine Zahl – Standard {default} wird verwendet"),
     "invalid_choice": ("{name}={value!r} is not one of {choices} – using the default {default}",
                        "{name}={value!r} ist nicht eins von {choices} – Standard {default} wird verwendet"),
+    "note_failed": ("could not prepare the note for the document: {error}",
+                    "Notiz für das Dokument konnte nicht vorbereitet werden: {error}"),
+    "note_written": ("document #{doc}: note written", "Dokument #{doc}: Notiz geschrieben"),
+    "note_write_failed": ("document #{doc}: could not write the note ({error})",
+                          "Dokument #{doc}: Notiz konnte nicht geschrieben werden ({error})"),
     "lap_render": ("render", "Rendern"),
     "lap_text_layer": ("text layer", "Textebene"),
     "lap_orientation": ("orientation", "Ausrichtung"),
@@ -256,6 +261,8 @@ class Settings:
     timing: bool = False  # Laufzeiten je Schritt und Seite ausgeben (Analyse/Optimierung)
     poppler_check: bool = True  # Ergebnis zusätzlich mit Poppler (pdftoppm) rendern – wie Paperless es liest
     keep_original: bool = False  # Original bis zur Prüfung als Version aufbewahren (originals.py)
+    note: bool = False  # Notiz am Dokument: was an der Datei gemacht wurde (notes.py; braucht API-Token)
+    note_unchanged: bool = False  # … auch für nicht komprimierte Dateien (Grund)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -295,6 +302,8 @@ class Settings:
             timing=_env_bool("MRC_TIMING", False),
             poppler_check=_env_bool("MRC_POPPLER_CHECK", True),
             keep_original=_env_bool("MRC_KEEP_ORIGINAL", False),
+            note=_env_bool("MRC_NOTE", True),
+            note_unchanged=_env_bool("MRC_NOTE_UNCHANGED", False),
         )
 
 
@@ -503,11 +512,13 @@ def skew_angle(image: Image.Image, max_angle: float = 5.0, min_confidence: float
 
 
 def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Page",
-                render_dpi: float | None = None, photo_check: bool = False) -> tuple[Path | None, bool]:
+                render_dpi: float | None = None, photo_check: bool = False) -> tuple[Path | None, bool, dict]:
     """Kodiert eine einseitige Scan-PDF per MRC. Rückgabe: Ergebnis (None = Foto, Seite bleibt),
-    Textebene übernommen? render_dpi: feste Auflösung (Vektorseiten); sonst die des Seitenbilds.
+    Textebene übernommen?, Angaben für die Notiz (rotated: Grad, deskewed: Winkel).
+    render_dpi: feste Auflösung (Vektorseiten); sonst die des Seitenbilds.
     photo_check: Seite nur kodieren, wenn genug Text erkannt wird (sonst Foto)."""
     clock = Stopwatch()
+    info: dict = {}
     with pymupdf.open(page_pdf) as doc:
         page = doc[0]
         scale = render_dpi / 72 if render_dpi else image_scale(page)
@@ -532,7 +543,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
     if has_text:
         if photo_check and sum(sum(c.isalnum() for c in w) >= 3 for w in words) < settings.photo_min_words:
             log(t("photo_text_layer", label=label))
-            return None, has_text
+            return None, has_text, info
         hocr = run(sys.executable, "-m", "paperless_mrc.compat", "pdf-to-hocr", "-f", page_pdf, "-J", meta_file).stdout
         save(image)
         clock.lap(t("lap_text_layer"))
@@ -555,6 +566,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
             if rotate:
                 image = image.rotate(-rotate, expand=True)
                 log(t("rotated", label=label, degrees=rotate))
+                info["rotated"] = rotate
         clock.lap(t("lap_orientation"))
         if settings.deskew:
             angle = skew_angle(image, settings.deskew_max, settings.deskew_confidence)
@@ -563,13 +575,14 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
             elif abs(angle) >= max(settings.deskew_min, 0.05):
                 image = image.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
                 log(t("deskewed", label=label, angle=angle))
+                info["deskewed"] = round(float(angle), 1)
         save(image)
         clock.lap(t("lap_deskew"))
         hocr = run("tesseract", image_path, "-", "-l", settings.language, "hocr").stdout
         clock.lap("OCR")
         if photo_check and (found := confident_words(hocr)) < settings.photo_min_words:
             log(t("photo_words", label=label, n=found))
-            return None, has_text
+            return None, has_text, info
 
     if settings.sharpen:
         # Erst nach der Texterkennung (die würde durch verstärktes Rauschen schlechter): hellgraue,
@@ -587,7 +600,7 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
     clock.lap("MRC")
     if settings.timing:
         log(t("time", label=label, clock=clock) + f" ({image.width}x{image.height} px, {dpi:.0f} dpi)")
-    return out, has_text
+    return out, has_text, info
 
 
 def fit_page(pdf: pikepdf.Pdf, page: pikepdf.Page, size: tuple[float, float] = A4) -> bool:
@@ -630,7 +643,8 @@ def replace_page_content(pdf: pikepdf.Pdf, page: pikepdf.Page, new: pikepdf.Page
 
 
 def build(src: Path, encode: list[int], blank: list[int], settings: Settings, work: Path,
-          vectors: set[int] = frozenset(), doubtful: set[int] = frozenset()) -> tuple[Path | None, list[tuple[bool, bool]]]:
+          vectors: set[int] = frozenset(), doubtful: set[int] = frozenset()
+          ) -> tuple[Path | None, list[tuple[bool, bool, dict]]]:
     """Kodiert die Scan-Seiten neu und setzt sie an ihrer Stelle in die Originaldatei ein.
     Alle anderen Seiten, Lesezeichen und Metadaten bleiben, wie sie sind; leere Seiten entfallen."""
     with pikepdf.open(src) as pdf, contextlib.ExitStack() as parts:
@@ -646,18 +660,20 @@ def build(src: Path, encode: list[int], blank: list[int], settings: Settings, wo
         args = [(d / "in.pdf", d, settings, t("page", n=index + 1), settings.vector_dpi if index in vectors else None,
                  index in doubtful) for d, index in zip(page_dirs, encode)]
         encoded = pmap(encode_page, args, settings.jobs)
-        results = [(path is not None, had_text) for path, had_text in encoded]
-        if not any(coded for coded, _ in results):
+        results = [(path is not None, had_text, info) for path, had_text, info in encoded]
+        if not any(coded for coded, _, _ in results):
             return None, results
 
         resized = 0
-        for index, (path, _) in zip(encode, encoded):
+        for index, (path, _, info) in zip(encode, encoded):
             if path is None:  # Foto: Seite bleibt unverändert
                 continue
             part = parts.enter_context(pikepdf.open(path))  # bis zum Speichern offen halten
             page = pdf.pages[index]
             replace_page_content(pdf, page, part.pages[0])
-            resized += settings.fit_a4 and fit_page(pdf, page, PAGE_SIZES[settings.fit_size])
+            if settings.fit_a4 and fit_page(pdf, page, PAGE_SIZES[settings.fit_size]):
+                resized += 1
+                info["resized"] = True
             fix_smask_colorspace(page)
         if resized:
             log(t("resized", n=resized, size={"a4": "A4", "letter": "Letter", "legal": "Legal"}[settings.fit_size]))
@@ -689,24 +705,40 @@ def verify(src: Path, keep: list[int], out: Path, text_checked: set[int], work: 
         raise RuntimeError(t("poppler_failed", error=check.stderr.strip()))
 
 
+def save_note(settings: Settings, status: str, reason: str, **data) -> None:
+    """Angaben für die Notiz am Dokument ablegen (notes.py) – nie zu Lasten der Komprimierung."""
+    if not settings.note or (status == "unchanged" and not settings.note_unchanged):
+        return
+    if reason == "original_version":  # das angehängte Original ist eine Version, kein neues Dokument
+        return
+    try:
+        notes.save(os.environ.get("TASK_ID", ""), {"status": status, "reason": reason, **data})
+    except Exception as exc:
+        log(t("note_failed", error=exc))
+
+
 def process(path: Path, settings: Settings) -> None:
+    def finish(status: str, reason: str, **data) -> None:
+        report(path.name, status, reason, **data)
+        save_note(settings, status, reason, **data)
+
     if path.suffix.lower() != ".pdf":
         log(t("not_pdf", name=path.name))
-        report(path.name, "unchanged", "not_pdf")
+        finish("unchanged", "not_pdf")
         return
     if originals.is_own_upload(path):  # auch bei inzwischen abgeschalteter Option: nie das Original komprimieren
         log(t("own_version", name=path.name))
-        report(path.name, "unchanged", "original_version")
+        finish("unchanged", "original_version")
         return
     clock = Stopwatch()
     with pymupdf.open(path) as doc:
         if doc.get_sigflags() > 0:
             log(t("signed", name=path.name))
-            report(path.name, "unchanged", "signed")
+            finish("unchanged", "signed")
             return
         if doc.metadata.get("encryption"):  # pikepdf würde Schutz und Rechtebeschränkungen beim Speichern entfernen
             log(t("encrypted", name=path.name))
-            report(path.name, "unchanged", "encrypted")
+            finish("unchanged", "encrypted")
             return
         pages = doc.page_count
         scans = [i for i, page in enumerate(doc) if is_scan_page(page)]
@@ -715,11 +747,11 @@ def process(path: Path, settings: Settings) -> None:
     candidates = sorted(scans + vectors)
     if not candidates:
         log(t("no_scanned_pages", name=path.name))
-        report(path.name, "unchanged", "no_scanned_pages")
+        finish("unchanged", "no_scanned_pages")
         return
     if not settings.mixed_pdfs and len(candidates) < pages:
         log(t("mixed_disabled", name=path.name))
-        report(path.name, "unchanged", "mixed_disabled")
+        finish("unchanged", "mixed_disabled")
         return
 
     clock.lap(t("lap_detect"))
@@ -742,7 +774,7 @@ def process(path: Path, settings: Settings) -> None:
     encode = [i for i in candidates if i not in photos and i not in blank]
     if not encode:
         log(t("nothing_to_compress", name=path.name, photos=len(photos), blank=len(blank)))
-        report(path.name, "unchanged", "nothing_to_compress", photos=len(photos), blank=len(blank))
+        finish("unchanged", "nothing_to_compress", photos=len(photos), blank=len(blank))
         return
     keep = [i for i in range(pages) if i not in blank]
     others = pages - len(candidates)
@@ -751,20 +783,20 @@ def process(path: Path, settings: Settings) -> None:
         work = Path(tmp)
         out, results = build(path, encode, blank, settings, work, set(vectors), doubtful)
         clock.lap(t("lap_encode", n=len(encode), jobs=settings.jobs))
-        photos += [i for i, (coded, _) in zip(encode, results) if not coded]
+        photos += [i for i, (coded, _, _) in zip(encode, results) if not coded]
         if out is None:
             log(t("nothing_to_compress", name=path.name, photos=len(photos), blank=len(blank)))
-            report(path.name, "unchanged", "nothing_to_compress", photos=len(photos), blank=len(blank))
+            finish("unchanged", "nothing_to_compress", photos=len(photos), blank=len(blank))
             return
-        text_kept = [had for coded, had in results if coded]
-        coded = [i for i, (c, _) in zip(encode, results) if c]
-        must_keep_text = {i for i, (c, had) in zip(encode, results) if c and had} | (set(keep) - set(coded))
+        text_kept = [had for coded, had, _ in results if coded]
+        coded = [i for i, (c, _, _) in zip(encode, results) if c]
+        must_keep_text = {i for i, (c, had, _) in zip(encode, results) if c and had} | (set(keep) - set(coded))
         verify(path, keep, out, must_keep_text, work, settings.poppler_check)
         clock.lap(t("lap_verify"))
         size_before, size_after = path.stat().st_size, out.stat().st_size
         if size_after >= size_before:
             log(t("not_smaller", name=path.name, size_after=size_after // 1024))
-            report(path.name, "unchanged", "not_smaller", size_before=size_before, size_after=size_after)
+            finish("unchanged", "not_smaller", size_before=size_before, size_after=size_after)
             return
         task_id = os.environ.get("TASK_ID", "")
         if settings.keep_original:
@@ -792,19 +824,35 @@ def process(path: Path, settings: Settings) -> None:
           pages=len(keep), details="".join(f", {d}" for d in details if d), source=t(f"source_{source}")))
     report(path.name, "compressed", "compressed", size_before=size_before, size_after=size_after, pages=len(keep),
            blank_removed=len(blank), photos=len(photos), vectorised=vectorised, digital=others, text_layer=source)
+    coded_info = [(i, had, info) for i, (c, had, info) in zip(encode, results) if c]
+    save_note(settings, "compressed", "compressed", size_before=size_before, size_after=size_after,
+              pages=len(keep), pages_before=pages, blank_pages=[i + 1 for i in blank],
+              photos_pages=sorted(i + 1 for i in photos), vectorised_pages=[i + 1 for i in vectors if i in coded],
+              digital_pages=[i + 1 for i in range(pages) if i not in candidates],
+              rotated=[(i + 1, info["rotated"]) for i, _, info in coded_info if info.get("rotated")],
+              deskewed=[(i + 1, info["deskewed"]) for i, _, info in coded_info if info.get("deskewed") is not None],
+              resized_pages=[i + 1 for i, _, info in coded_info if info.get("resized")],
+              fit_size={"a4": "A4", "letter": "Letter", "legal": "Legal"}[settings.fit_size],
+              text_kept_pages=[i + 1 for i, had, _ in coded_info if had],
+              text_ocr_pages=[i + 1 for i, had, _ in coded_info if not had],
+              languages=settings.language, seconds=round(clock.last - clock.start, 1))
 
 def main() -> int:
     working_path = os.environ.get("DOCUMENT_WORKING_PATH")
     if not working_path:
         log(t("no_working_path"))
         return 0
+    settings = None
     try:
-        process(Path(working_path), Settings.from_env())
+        settings = Settings.from_env()
+        process(Path(working_path), settings)
     except Exception as exc:  # fail-safe: Paperless soll das Original normal verarbeiten
         detail = exc.stderr.strip()[-500:] if isinstance(exc, subprocess.CalledProcessError) else ""
         error = f"{exc!r} {detail}".strip()
         log(t("error", error=error))
         report(Path(working_path).name, "error", "error", message=error)
+        if settings is not None:
+            save_note(settings, "error", "error", message=error)
     return 0
 
 

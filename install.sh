@@ -122,14 +122,36 @@ if [[ -z "$current" ]]; then
   ok "$(say "Pre-consume script set in $CONF" "Pre-Consume-Skript in $CONF eingetragen")"
 fi
 
-# ---- Optional: keep the original until it has been checked ----------------------------------
-if [[ "$(conf_value MRC_KEEP_ORIGINAL)" =~ ^(true|1|t|y|yes)$ ]]; then
-  post_current="$(conf_value PAPERLESS_POST_CONSUME_SCRIPT)"
-  [[ -z "$post_current" || "$post_current" == "$POST" ]] \
-    || die "$(say "A different post-consume script is already set in $CONF: $post_current" \
-                  "In $CONF ist bereits ein anderes Post-Consume-Skript eingetragen: $post_current")"
-  install -d -m 700 -o "$run_user" "$INSTALL_DIR/originals"
+# ---- Optional: note and kept original (both need the post-consume script and the API token) ------
+is_true() { [[ "${1,,}" =~ ^(true|1|t|y|yes)$ ]]; }
+keep_original=false; note=false
+is_true "$(conf_value MRC_KEEP_ORIGINAL)" && keep_original=true
+note_value="$(conf_value MRC_NOTE)"
+[[ -z "$note_value" ]] || is_true "$note_value" && note=true  # Standard: an
+post_current="$(conf_value PAPERLESS_POST_CONSUME_SCRIPT)"
+if [[ -n "$post_current" && "$post_current" != "$POST" ]]; then
+  $keep_original && die "$(say "A different post-consume script is already set in $CONF: $post_current" \
+                               "In $CONF ist bereits ein anderes Post-Consume-Skript eingetragen: $post_current")"
+  if $note; then  # die Notiz ist nur eine Zugabe – deshalb nicht abbrechen
+    warn "$(say "A different post-consume script is set ($post_current) – no notes on documents" \
+                "Ein anderes Post-Consume-Skript ist eingetragen ($post_current) – keine Notizen an Dokumenten")"
+    note=false
+  fi
+fi
+if $note || $keep_original; then
+  install -d -m 700 -o "$run_user" "$INSTALL_DIR/notes"
   [[ "$post_current" == "$POST" ]] || set_conf PAPERLESS_POST_CONSUME_SCRIPT "$POST"
+  $note && ok "$(say "Each document gets a note describing what was done to the file" \
+                     "Jedes Dokument erhält eine Notiz, was an der Datei gemacht wurde")"
+  if [[ -z "$(conf_value MRC_API_TOKEN)" ]]; then
+    warn "$(say "Still needed: create an API token in Paperless under “My Profile” and add it to $CONF" \
+                "Noch nötig: In Paperless unter „Mein Profil“ ein API-Token erzeugen und in $CONF eintragen")"
+    printf '     MRC_API_TOKEN=<token>\n'
+  fi
+fi
+
+if $keep_original; then
+  install -d -m 700 -o "$run_user" "$INSTALL_DIR/originals"
   cat > /etc/systemd/system/paperless-mrc-cleanup.service <<UNIT
 [Unit]
 Description=paperless-mrc: attach kept originals and delete them when due
@@ -159,11 +181,6 @@ UNIT
   if [[ "$run_user" != root ]] && ! runuser -u "$run_user" -- test -r "$CONF"; then
     warn "$(say "$run_user cannot read $CONF – the cleanup timer will not find the API token" \
                 "$run_user kann $CONF nicht lesen – der Aufräum-Timer findet das API-Token nicht")"
-  fi
-  if [[ -z "$(conf_value MRC_API_TOKEN)" ]]; then
-    warn "$(say "Still needed: create an API token in Paperless under “My Profile” and add it to $CONF" \
-                "Noch nötig: In Paperless unter „Mein Profil“ ein API-Token erzeugen und in $CONF eintragen")"
-    printf '     MRC_API_TOKEN=<token>\n'
   fi
 fi
 

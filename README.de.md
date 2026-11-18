@@ -96,6 +96,34 @@ Fragen). Man kann auch alle Einstellungen noch einmal durchgehen. **Ohne Fragen*
 `MRC_YES=1 bash -c "…"` übernimmt die bestehenden Einstellungen. **Entfernen:** die Zeile
 `PAPERLESS_PRE_CONSUME_SCRIPT=…` aus `paperless.conf` löschen und beide Dienste neu starten.
 
+## Notiz am Dokument
+
+Jedes komprimierte Dokument erhält in Paperless eine kurze Notiz (Reiter *Notizen*), was an der Datei gemacht wurde:
+
+```
+**paperless-mrc** · 18.11.2026 14:32
+
+- Komprimiert: 4,8 MB → 412 KB (−92 %)
+- Seiten: 5 → 4
+- Leere Seiten entfernt: 5
+- Gedreht: Seite 3 (180°)
+- Begradigt: Seite 1 (+1,2°)
+- Textebene: mit Tesseract erkannt (deu+eng)
+- Dauer: 38 s
+
+_Seitenangaben beziehen sich auf die eingelesene Datei._
+```
+
+Ab Paperless-ngx 3.5 wird die Notiz formatiert angezeigt (Markdown), davor als einfacher Text. Die Sprache richtet
+sich wie beim unten beschriebenen Feld nach dem Paperless-Benutzer des API-Tokens (`MRC_LANGUAGE` hat Vorrang).
+Unverändert gelassene Dokumente bekommen nur mit `MRC_NOTE_UNCHANGED=true` eine Notiz mit dem Grund; Fehler werden
+immer vermerkt.
+
+Die Notiz braucht ein API-Token (in Paperless unter *Mein Profil* erzeugen; der Installer fragt danach). Sie wird vom
+Post-Consume-Skript geschrieben, das der Installer zusammen mit dem Ordner `/opt/paperless-mrc/notes` einrichtet. Ohne
+Token oder wenn schon ein anderes Post-Consume-Skript eingetragen ist, gibt es einfach keine Notiz – die Komprimierung
+läuft wie bisher. **Abschalten:** `MRC_NOTE=false`.
+
 ## Optional: Original bis zur Prüfung aufbewahren
 
 Normalerweise ersetzt die komprimierte Datei das Original. Wer das Ergebnis erst prüfen möchte, kann paperless-mrc das
@@ -192,10 +220,13 @@ ungültiger Wert (keine Zahl) wird durch den Standard ersetzt und im Log gemelde
 | `MRC_POPPLER_CHECK` | `true` | | Ergebnis zusätzlich mit Poppler (`pdftoppm`) darstellen und bei Fehlern verwerfen |
 | `MRC_LANGUAGE` | `en` | | Sprache der Log-Meldungen: `en` oder `de` |
 | `MRC_TIMING` | `false` | | Dauer jedes Schritts je Seite ins Log schreiben |
+| **Notiz am Dokument** | | | |
+| `MRC_NOTE` | `true` | | Notiz anlegen, was an der Datei gemacht wurde (braucht `MRC_API_TOKEN`) |
+| `MRC_NOTE_UNCHANGED` | `false` | | Auch bei unverändert gelassenen Dokumenten eine Notiz mit dem Grund anlegen |
 | **Original aufbewahren (optional)** | | | |
 | `MRC_KEEP_ORIGINAL` | `false` | | Original bis zur Prüfung als Version aufbewahren (siehe oben) |
 | `MRC_KEEP_ORIGINAL_DAYS` | `30` | 1–3650 | Standardfrist, nach der das Original gelöscht wird |
-| `MRC_API_TOKEN` | – | | API-Token von Paperless (aus *Mein Profil*), nötig zum Anhängen und Löschen von Versionen |
+| `MRC_API_TOKEN` | – | | API-Token von Paperless (aus *Mein Profil*), nötig für die Notiz sowie zum Anhängen und Löschen von Versionen |
 | `MRC_API_URL` | `http://localhost:8000` | | Adresse der Paperless-API aus dem Container (Port aus `PAPERLESS_PORT`) |
 | `MRC_ORIGINALS_DIR` | `/opt/paperless-mrc/originals` | | Hier warten Originale, bis sie angehängt sind |
 

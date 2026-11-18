@@ -54,7 +54,8 @@ def test_standardwerte_wie_im_code(monkeypatch):
               "MRC_BLANK_INK_PERCENT": s.blank_ink_percent, "MRC_BLANK_INK_CONTRAST": s.blank_ink_contrast,
               "MRC_BLANK_PAPER_PERCENT": s.blank_paper_percent, "PAPERLESS_OCR_DESKEW": s.deskew,
               "PAPERLESS_OCR_ROTATE_PAGES": s.rotate, "PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD": s.rotate_threshold,
-              "MRC_POPPLER_CHECK": s.poppler_check, "MRC_TIMING": s.timing, "PAPERLESS_OCR_LANGUAGE": s.language}
+              "MRC_POPPLER_CHECK": s.poppler_check, "MRC_TIMING": s.timing, "PAPERLESS_OCR_LANGUAGE": s.language,
+              "MRC_NOTE": s.note, "MRC_NOTE_UNCHANGED": s.note_unchanged}
     for key, value in fields.items():
         option = catalog.BY_KEY[key]
         if option.kind == "bool":
@@ -79,7 +80,7 @@ def test_zahlen_haben_einen_bereich(option):
 @pytest.mark.parametrize("option", catalog.OPTIONS, ids=lambda o: o.key)
 def test_texte_zweisprachig_und_abhaengigkeiten_gueltig(option):
     assert all(option.title) and all(option.help) and all(option.group)
-    if option.requires:
-        assert catalog.BY_KEY[option.requires].kind in ("bool", "int", "float")
+    for key in catalog.requirements(option):
+        assert catalog.BY_KEY[key].kind in ("bool", "int", "float")
     if option.kind == "choice":
         assert option.default in option.choices

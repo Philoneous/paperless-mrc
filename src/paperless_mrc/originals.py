@@ -241,17 +241,38 @@ def attach(api: Api, task_id: str, doc_id: int) -> bool:
 
 
 def post_consume() -> int:
-    """Einstieg paperless-mrc-post (PAPERLESS_POST_CONSUME_SCRIPT). Gibt immer 0 zurück: Ein Fehler hier darf die
+    """Einstieg paperless-mrc-post (PAPERLESS_POST_CONSUME_SCRIPT): Original als Version anhängen
+    (MRC_KEEP_ORIGINAL) und Notiz schreiben (MRC_NOTE). Gibt immer 0 zurück: Ein Fehler hier darf die
     Verarbeitung in Paperless nicht scheitern lassen; das Original bleibt dann abgelegt (Aufräumen meldet es)."""
+    from paperless_mrc import notes
     from paperless_mrc.main import log, t
 
     task_id, doc = os.environ.get("TASK_ID", ""), os.environ.get("DOCUMENT_ID", "")
-    if not (task_id and doc and (hold_dir() / f"{task_id}.json").exists()):
-        return 0  # nichts abgelegt (Option aus, nicht komprimiert oder eigene Version)
+    held = bool(task_id) and (hold_dir() / f"{task_id}.json").exists()
+    note = notes.pending(task_id)
+    if not (doc and (held or note)):
+        notes.discard(task_id)
+        return 0  # nichts abgelegt (Optionen aus, nicht komprimiert oder eigene Version)
     try:
-        attach(Api.from_env(), task_id, int(doc))
+        api = Api.from_env()
     except Exception as exc:
-        log(t("original_attach_failed", doc=doc, error=exc, folder=hold_dir()))
+        if held:
+            log(t("original_attach_failed", doc=doc, error=exc, folder=hold_dir()))
+        notes.discard(task_id)  # ohne Token keine Notiz – still, die Option ist dann wirkungslos
+        return 0
+    original = None
+    if held:
+        try:
+            original = attach(api, task_id, int(doc))
+        except Exception as exc:
+            original = False
+            log(t("original_attach_failed", doc=doc, error=exc, folder=hold_dir()))
+    if note:
+        try:
+            notes.write(api, int(doc), task_id, original)
+            log(t("note_written", doc=doc))
+        except Exception as exc:
+            log(t("note_write_failed", doc=doc, error=exc))
     return 0
 
 

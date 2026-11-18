@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-REVISION = 1  # erhöhen, sobald eine Option hinzukommt (since der neuen Option = REVISION)
+REVISION = 2  # erhöhen, sobald eine Option hinzukommt (since der neuen Option = REVISION)
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class Option:
     choices: tuple[str, ...] = ()
     since: int = 1
     secret: bool = False
-    requires: str | None = None  # nur fragen, wenn diese Ja/Nein-Option an ist
+    requires: str | tuple[str, ...] | None = None  # nur fragen, wenn (eine) dieser Optionen an ist
     min_max: tuple[float, float] | None = field(default=None)  # sonst aus main.RANGES
 
 
@@ -36,6 +36,9 @@ PAGES = ("Page selection", "Seitenauswahl")
 OCR = ("Text recognition", "Texterkennung")
 BLANK = ("Blank pages", "Leere Seiten")
 ORIGINAL = ("Keep the original until checked", "Original bis zur Prüfung aufbewahren")
+NOTE = ("Note on the document", "Notiz am Dokument")
+API = ("Paperless API", "Paperless-API")
+NEEDS_API = ("MRC_NOTE", "MRC_KEEP_ORIGINAL")  # Optionen, die das API-Token brauchen
 OTHER = ("Other", "Sonstiges")
 
 OPTIONS: list[Option] = [
@@ -78,6 +81,14 @@ OPTIONS: list[Option] = [
            title=("Paper format", "Papierformat"),
            help=("Target format for corrected page sizes: a4, letter (US Letter) or legal (US Legal).",
                  "Zielformat für korrigierte Seitengrößen: a4, letter (US Letter) oder legal (US Legal).")),
+    Option("MRC_NOTE", "basic", "bool", "true", group=NOTE, since=2,
+           title=("Add a note with what was done", "Notiz anlegen, was gemacht wurde"),
+           help=("Adds a note to each compressed document: size before/after, removed blank pages, photo pages "
+                 "left unchanged, rotated and straightened pages, where the text layer comes from. Needs an API "
+                 "token; also written when compression failed.",
+                 "Legt an jedem komprimierten Dokument eine Notiz an: Größe vorher/nachher, entfernte leere "
+                 "Seiten, unverändert gelassene Fotoseiten, gedrehte und begradigte Seiten, Herkunft der "
+                 "Textebene. Braucht ein API-Token; auch bei fehlgeschlagener Komprimierung.")),
     Option("MRC_KEEP_ORIGINAL", "basic", "bool", "false", group=ORIGINAL,
            title=("Keep the original until you have checked it", "Original bis zur Prüfung aufbewahren"),
            help=("Keeps the original as a second version of the document (Paperless-ngx 3 or later); a field "
@@ -89,11 +100,12 @@ OPTIONS: list[Option] = [
            help=("Default period after which a kept original is deleted, unless “Keep” is chosen in the document.",
                  "Standardfrist, nach der ein aufbewahrtes Original gelöscht wird – außer im Dokument ist "
                  "„Behalten“ gewählt.")),
-    Option("MRC_API_TOKEN", "basic", "text", "", requires="MRC_KEEP_ORIGINAL", group=ORIGINAL, secret=True,
+    Option("MRC_API_TOKEN", "basic", "text", "", requires=NEEDS_API, group=API, secret=True,
            title=("Paperless API token", "API-Token von Paperless"),
-           help=("Create it in Paperless under “My Profile” → API token. Needed to attach and delete the original.",
-                 "In Paperless unter „Mein Profil“ → API-Token erzeugen. Nötig zum Anhängen und Löschen des "
-                 "Originals.")),
+           help=("Create it in Paperless under “My Profile” → API token. Needed for the note and to attach and "
+                 "delete the original.",
+                 "In Paperless unter „Mein Profil“ → API-Token erzeugen. Nötig für die Notiz und zum Anhängen und "
+                 "Löschen des Originals.")),
     # ---------------------------------------------------------------- Details (nur auf Wunsch)
     Option("MRC_SHARPEN", "advanced", "int", "150", group=QUALITY,
            title=("Sharpening (%)", "Nachschärfen (%)"),
@@ -201,7 +213,12 @@ OPTIONS: list[Option] = [
            title=("Pages processed at the same time", "Gleichzeitig verarbeitete Seiten"),
            help=("Empty = as Paperless (PAPERLESS_THREADS_PER_WORKER, otherwise cores ÷ task workers).",
                  "Leer = wie Paperless (PAPERLESS_THREADS_PER_WORKER, sonst Kerne ÷ Worker).")),
-    Option("MRC_API_URL", "advanced", "text", "", requires="MRC_KEEP_ORIGINAL", group=ORIGINAL,
+    Option("MRC_NOTE_UNCHANGED", "advanced", "bool", "false", requires="MRC_NOTE", group=NOTE, since=2,
+           title=("Also add a note when nothing was compressed", "Notiz auch, wenn nichts komprimiert wurde"),
+           help=("Then every document gets a note with the reason, e.g. “no scanned pages” for digital PDFs.",
+                 "Dann bekommt jedes Dokument eine Notiz mit dem Grund, z. B. „keine gescannten Seiten“ bei "
+                 "digitalen PDFs.")),
+    Option("MRC_API_URL", "advanced", "text", "", requires=NEEDS_API, group=API,
            title=("Paperless API address", "Adresse der Paperless-API"),
            help=("Empty = http://localhost:<PAPERLESS_PORT or 8000>. Only needed if Paperless runs elsewhere or "
                  "under a sub-path.",
@@ -222,6 +239,13 @@ OPTIONS: list[Option] = [
 
 BY_KEY = {o.key: o for o in OPTIONS}
 
+
+def requirements(option: Option) -> tuple[str, ...]:
+    """Optionen, von denen diese abhängt (leer: keine)."""
+    if not option.requires:
+        return ()
+    return (option.requires,) if isinstance(option.requires, str) else tuple(option.requires)
+
 # Gelesen, aber keine Einstellung für den Assistenten (von Paperless gesetzt bzw. intern)
 NOT_SETTINGS = {"DOCUMENT_ID", "DOCUMENT_WORKING_PATH", "TASK_ID", "PAPERLESS_TASK_WORKERS", "PAPERLESS_PORT",
-                "PAPERLESS_THREADS_PER_WORKER", "MRC_PAPERLESS_CONF", "MRC_ORIGINALS_DIR"}
+                "PAPERLESS_THREADS_PER_WORKER", "MRC_PAPERLESS_CONF", "MRC_ORIGINALS_DIR", "MRC_NOTES_DIR"}

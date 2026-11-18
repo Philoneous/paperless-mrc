@@ -199,6 +199,7 @@ class Wizard:
         self.p = prompter
         self.conf = read_conf(conf_path)
         self.answers: dict[str, str] = dict(presets)
+        self.asked: set[str] = set()
 
     def current(self, option: Option) -> str:
         if option.key in self.answers:
@@ -210,10 +211,11 @@ class Wizard:
         return option.default
 
     def enabled(self, option: Option) -> bool:
-        """Abhängige Option nur fragen, wenn die Voraussetzung an ist (Ja/Nein: ja; Zahl: ungleich 0)."""
-        if not option.requires:
-            return True
-        required = catalog.BY_KEY[option.requires]
+        """Abhängige Option nur fragen, wenn eine Voraussetzung an ist (Ja/Nein: ja; Zahl: ungleich 0)."""
+        needs = catalog.requirements(option)
+        return not needs or any(self.is_on(catalog.BY_KEY[key]) for key in needs)
+
+    def is_on(self, required: Option) -> bool:
         value = self.current(required).lower()
         if required.kind == "bool":
             return value in TRUE
@@ -222,9 +224,18 @@ class Wizard:
         except ValueError:
             return False
 
+    def follow_ups(self, option: Option, questions: list[Option], only_missing: bool) -> None:
+        """Basis-Optionen, die von option abhängen, direkt danach fragen (jede nur einmal). only_missing: nur,
+        wenn noch kein Wert gesetzt ist (Update: z. B. fehlendes API-Token für eine neue Funktion)."""
+        for follow in questions:
+            if (follow.level == "basic" and option.key in catalog.requirements(follow) and follow.key not in self.asked
+                    and not (only_missing and self.current(follow))):
+                self.ask_option(follow)
+
     def ask_option(self, option: Option, position: str = "") -> None:
         if not self.enabled(option):
             return
+        self.asked.add(option.key)
         de = 1 if self.p.de else 0
         self.p.say()
         self.p.say(f"{position}{option.title[de]}")
@@ -302,12 +313,12 @@ class Wizard:
                     self.p.say(self.p.text("new_count", n=len(new)))
                     for option in new:
                         self.ask_option(option)
+                        self.follow_ups(option, questions, only_missing=True)
             else:
                 basic = [o for o in questions if o.level == "basic" and not o.requires]
                 for number, option in enumerate(basic, 1):
                     self.ask_option(option, f"({number}/{len(basic)}) ")
-                    for follow in (o for o in questions if o.level == "basic" and o.requires == option.key):
-                        self.ask_option(follow)
+                    self.follow_ups(option, questions, only_missing=False)
                 self.p.say()
                 if self.p.yes(self.p.text("advanced"), False):
                     self.ask_advanced([o for o in questions if o.level == "advanced"])
