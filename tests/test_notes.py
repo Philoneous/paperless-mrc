@@ -116,3 +116,26 @@ def test_render_einzelheiten_englisch():
     assert "could not be attached" in text and "- Duration: 1 min 15 s" in text
     assert text.endswith("_Page numbers refer to the uploaded file._")
     assert json.dumps(data)  # nur JSON-fähige Werte
+
+
+def test_dieselbe_datei_erneut_hochgeladen_wird_komprimiert(tmp_path, rng, env, monkeypatch):
+    # Fall aus dem Betrieb: Original von #7 ist als Version angehängt, die Kopie liegt noch (Aufräumen stündlich);
+    # dieselbe Datei kommt erneut als neues Dokument → nicht für das eigene Original halten
+    _, server = env
+    keep = replace(SETTINGS, keep_original=True)
+    path = write_scan_pdf(tmp_path / "brief.pdf", [letter_page(rng)])
+    original = path.read_bytes()
+    mrc.process(path, keep)
+    server.add_document(7, path)
+    originals.post_consume()
+    assert any(v["version_label"] == "Original" for v in server.docs[7]["versions"])
+
+    again = tmp_path / "nochmal.pdf"
+    again.write_bytes(original)
+    monkeypatch.setenv("TASK_ID", "task-2")
+    monkeypatch.setenv("DOCUMENT_ID", "8")
+    mrc.process(again, keep)
+    assert again.read_bytes() != original  # komprimiert
+    server.add_document(8, again, task_id="task-2")
+    originals.post_consume()
+    assert "- Komprimiert: " in server.docs[8]["notes"][0]["note"]

@@ -7,7 +7,8 @@ Paperless-ngx 3 kennt Dokumentversionen; die erste (Root) lässt sich nicht lös
    Klappt das nicht, bleibt die Datei unkomprimiert. Paperless speichert die komprimierte Fassung als Dokument.
 2. Post-Consume (paperless-mrc-post, gleiche TASK_ID): Das Original wird als Version „Original“ angehängt und das
    Auswahlfeld „Original (MRC)“ auf „Löschen nach N Tagen“ gesetzt. Diese Version durchläuft das Pre-Consume-Skript
-   erneut und wird dort an ihrer Prüfsumme erkannt (Marker <sha256>.version) und nicht komprimiert.
+   erneut und wird dort an ihrer Prüfsumme erkannt (Marker <sha256>.version, gilt für einen Durchlauf) und nicht
+   komprimiert.
 3. Aufräumen (paperless-mrc-cleanup, systemd-Timer): löscht die Version „Original“ bei „Jetzt löschen“ oder nach
    Ablauf der Frist, entfernt dann das Feld. „Behalten“ behält sie dauerhaft. Gelöscht wird nur bei eindeutiger
    Lage; die abgelegte Kopie erst, wenn die Version mit passender Prüfsumme in Paperless angekommen ist.
@@ -115,9 +116,19 @@ def release(task_id: str) -> None:
 
 
 def is_own_upload(path: Path) -> bool:
-    """Ist die Datei ein Original, das paperless-mrc gerade als Version hochlädt? (dann nicht komprimieren)"""
+    """Ist die Datei ein Original, das paperless-mrc gerade als Version hochlädt? (dann nicht komprimieren)
+
+    Der Marker gilt nur für genau einen Durchlauf: Lädt jemand dieselbe Datei später noch einmal als neues
+    Dokument hoch, solange die Kopie noch abgelegt ist, wird sie wie jede andere komprimiert."""
     folder = hold_dir()
-    return folder.is_dir() and (folder / f"{sha256(path)}.version").exists()
+    if not folder.is_dir():
+        return False
+    marker = folder / f"{sha256(path)}.version"
+    try:
+        marker.unlink()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 # ----------------------------------------------------------------------------- Paperless-API
