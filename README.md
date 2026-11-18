@@ -201,6 +201,8 @@ number) is replaced by the default and reported in the log.
 | **Text recognition** | | | |
 | `MRC_KEEP_TEXT_LAYER` | `true` | | Keep an existing text layer; `false` = always recognize again (pages are then also rotated and straightened) |
 | `MRC_ROTATE_CHECK` | `true` | | If the orientation detection is unsure but suggests a rotation, recognize the text in both orientations and rotate only if that gives clearly more words – helps with landscape forms scanned in portrait |
+| `MRC_ROTATE_CHECK_MIN_WORDS` | `5` | 1–100 | Rotation check: the rotated orientation must give at least this many confidently recognized words. Smaller = upside-down pages with little text are turned too; larger = only pages with plenty of text |
+| `MRC_ROTATE_CHECK_FACTOR` | `1.5` | 1–5 | Rotation check: the rotated orientation must give this many times more words than the current one. Smaller = turns more readily; larger = only when clearly better |
 | `MRC_DESKEW_MIN_ANGLE` | `0.2` | 0–2 | Smaller skews (degrees) are left as they are. 0 = correct every detected skew |
 | `MRC_DESKEW_MAX_ANGLE` | `5` | 0.5–45 | Search range ± in degrees. Larger = also strongly skewed pages, but slower. A result at the edge of the range counts as ambiguous and is not corrected |
 | `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | 1–3 | Only straighten if the best angle clearly stands out. 1 = always (logos or stamps on pages with little text can tilt a straight page); 3 = only pages with many clear lines of text |
@@ -220,6 +222,7 @@ number) is replaced by the default and reported in the log.
 | **Keep the original (optional)** | | | |
 | `MRC_KEEP_ORIGINAL` | `false` | | Keep the original as a version until you have checked it (see above) |
 | `MRC_KEEP_ORIGINAL_DAYS` | `30` | 1–3650 | Default period after which the original is deleted |
+| `MRC_KEEP_ORIGINAL_RETRY_HOURS` | `6` | 0–720 | If the original version has not arrived in Paperless after this time (e.g. Paperless was restarted while processing it), upload it once more. 0 = never, only warn after 24 hours |
 | `MRC_API_TOKEN` | – | | Paperless API token (from *My Profile*), needed for the note and to attach and delete versions |
 | `MRC_API_URL` | `http://localhost:8000` | | Address of the Paperless API from inside the container (port from `PAPERLESS_PORT`) |
 | `MRC_ORIGINALS_DIR` | `/opt/paperless-mrc/originals` | | Where originals wait until they are attached |

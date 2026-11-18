@@ -508,8 +508,14 @@ def test_decide_rotation_uncertain_page_is_checked_by_text_recognition():
     counts = {0: 300, 90: 40}
     assert mrc.decide_rotation(90, 2.0, 12.0, True, counts.__getitem__) == (0, 300, 40)
     # zu wenig Text für eine Entscheidung: nicht drehen
-    counts = {0: 0, 270: 5}
+    counts = {0: 0, 270: 4}
     assert mrc.decide_rotation(270, 1.0, 12.0, True, counts.__getitem__)[0] == 0
+    # kopfstehende Schlussseite mit wenig Text (gemessen 1 zu 7, OSD-Sicherheit 2,1): drehen
+    counts = {0: 1, 180: 7}
+    assert mrc.decide_rotation(180, 2.1, 12.0, True, counts.__getitem__)[0] == 180
+    # Schwellen einstellbar (MRC_ROTATE_CHECK_MIN_WORDS, MRC_ROTATE_CHECK_FACTOR)
+    assert mrc.decide_rotation(180, 2.1, 12.0, True, counts.__getitem__, min_words=10)[0] == 0
+    assert mrc.decide_rotation(180, 2.1, 12.0, True, counts.__getitem__, factor=8)[0] == 0
 
 
 def test_decide_rotation_without_check_or_with_confident_osd():

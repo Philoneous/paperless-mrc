@@ -96,17 +96,19 @@ def test_bestehend_uebernehmen_ohne_neue_optionen(tmp_path):
 
 def test_bestehend_ohne_setup_json_gilt_als_revision_1(tmp_path):
     # Installationen vor dem Assistenten werden nicht mit allen Fragen überrollt: nur Optionen ab Revision 2
-    conf, out, _ = run(tmp_path, ["y", "", "", ""], conf_text="PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\n")
-    assert "2 new option(s)" in out and "OCR languages" not in out
+    conf, out, _ = run(tmp_path, ["y"] + [""] * 8, conf_text="PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\n")
+    assert "5 new option(s)" in out  # alle Optionen ab Revision 2
+    assert "OCR languages" not in out
     assert "Paperless API token" in out  # neue Funktion braucht das noch fehlende Token
 
 
 def test_update_neue_notiz_fragt_token_nur_wenn_es_fehlt(tmp_path):
     existing = "PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\nMRC_KEEP_ORIGINAL=true\nMRC_API_TOKEN=geheim\n"
-    conf, out, _ = run(tmp_path, ["y", "", ""], conf_text=existing, state={"revision": 1})
+    conf, out, _ = run(tmp_path, ["y"] + [""] * 8, conf_text=existing, state={"revision": 1})
     assert out.count("Paperless API token") == 1  # nur in der Übersicht (••••), keine erneute Frage
     assert conf["MRC_API_TOKEN"] == "geheim" and "geheim" not in out
-    conf, out, _ = run(tmp_path, ["y", "n"], conf_text="PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\n", state={"revision": 1})
+    conf, out, _ = run(tmp_path, ["y", "n"] + [""] * 8, conf_text="PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\n",
+                       state={"revision": 1})
     assert conf["MRC_NOTE"] == "false" and "Paperless API token" not in out  # Notiz aus: kein Token nötig
 
 

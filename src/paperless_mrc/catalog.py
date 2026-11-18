@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-REVISION = 2  # erhöhen, sobald eine Option hinzukommt (since der neuen Option = REVISION)
+REVISION = 3  # erhöhen, sobald eine Option hinzukommt (since der neuen Option = REVISION)
 
 
 @dataclass(frozen=True)
@@ -100,6 +100,13 @@ OPTIONS: list[Option] = [
            help=("Default period after which a kept original is deleted, unless “Keep” is chosen in the document.",
                  "Standardfrist, nach der ein aufbewahrtes Original gelöscht wird – außer im Dokument ist "
                  "„Behalten“ gewählt.")),
+    Option("MRC_KEEP_ORIGINAL_RETRY_HOURS", "advanced", "int", "6", requires="MRC_KEEP_ORIGINAL", group=ORIGINAL,
+           since=3, title=("Upload the original again after (hours)", "Original erneut hochladen nach (Stunden)"),
+           help=("If the original version has not arrived in Paperless after this time (e.g. Paperless was "
+                 "restarted while processing it), upload it once more. 0 = never, only warn after 24 hours.",
+                 "Ist die Version „Original“ nach dieser Zeit nicht in Paperless angekommen (z. B. Neustart von "
+                 "Paperless während der Verarbeitung), wird sie einmal erneut hochgeladen. 0 = nie, nur nach 24 "
+                 "Stunden warnen.")),
     Option("MRC_API_TOKEN", "basic", "text", "", requires=NEEDS_API, group=API, secret=True,
            title=("Paperless API token", "API-Token von Paperless"),
            help=("Create it in Paperless under “My Profile” → API token. Needed for the note and to attach and "
@@ -168,6 +175,18 @@ OPTIONS: list[Option] = [
                  "with landscape forms scanned in portrait.",
                  "Ist die Lageerkennung unsicher, beide Lagen anhand erkannter Wörter vergleichen – hilft bei quer "
                  "beschriebenen, hochkant gescannten Formularen.")),
+    Option("MRC_ROTATE_CHECK_MIN_WORDS", "advanced", "int", "5", requires="MRC_ROTATE_CHECK", group=OCR, since=3,
+           title=("Rotation check: minimum words", "Drehungsprüfung: Mindestzahl Wörter"),
+           help=("The rotated orientation must give at least this many confidently recognized words. Smaller = "
+                 "upside-down pages with little text are turned too; larger = only pages with plenty of text.",
+                 "So viele sicher erkannte Wörter muss die gedrehte Lage mindestens ergeben. Kleiner = auch "
+                 "kopfstehende Seiten mit wenig Text werden gedreht; größer = nur Seiten mit viel Text.")),
+    Option("MRC_ROTATE_CHECK_FACTOR", "advanced", "float", "1.5", requires="MRC_ROTATE_CHECK", group=OCR, since=3,
+           title=("Rotation check: how many times more words", "Drehungsprüfung: wie viel mal mehr Wörter"),
+           help=("The rotated orientation must give this many times more words than the current one. Smaller = "
+                 "turns more readily; larger = turns only when clearly better.",
+                 "So viel mal mehr Wörter muss die gedrehte Lage ergeben als die bisherige. Kleiner = dreht "
+                 "bereitwilliger; größer = dreht nur, wenn es deutlich besser ist.")),
     Option("MRC_DESKEW_MIN_ANGLE", "advanced", "float", "0.2", requires="PAPERLESS_OCR_DESKEW", group=OCR,
            title=("Minimum skew (degrees)", "Erst ab Schräglage (Grad)"),
            help=("Smaller skews are left as they are. 0 = correct every detected skew.",

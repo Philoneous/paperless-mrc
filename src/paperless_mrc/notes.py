@@ -101,10 +101,9 @@ def _size(n: int, de: bool) -> str:
     return text.replace(".", ",") if de else text
 
 
-def _duration(seconds: float, de: bool) -> str:
+def _duration(seconds: float) -> str:
     seconds = round(seconds)
-    text = f"{seconds} s" if seconds < 60 else f"{seconds // 60} min {seconds % 60} s"
-    return text
+    return f"{seconds} s" if seconds < 60 else f"{seconds // 60} min {seconds % 60} s"
 
 
 def render(data: dict, de: bool, original: bool | None = None) -> str:
@@ -141,7 +140,8 @@ def render(data: dict, de: bool, original: bool | None = None) -> str:
     if data.get("rotated"):
         lines.append(f"- {t('rotated', items=', '.join(f'{pages([p])} ({d}°)' for p, d in data['rotated']))}")
     if data.get("deskewed"):
-        items = ", ".join(f"{pages([p])} ({a:+.1f}°)".replace(".", "," if de else ".") for p, a in data["deskewed"])
+        items = ", ".join(f"{pages([p])} ({a:+.1f}°)".replace(".", "," if de else ".").replace("-", "−")
+                          for p, a in data["deskewed"])
         lines.append(f"- {t('deskewed', items=items)}")
     if data.get("resized_pages"):
         lines.append(f"- {t('resized', size=data.get('fit_size', 'A4'), pages=page_ranges(data['resized_pages']))}")
@@ -158,7 +158,7 @@ def render(data: dict, de: bool, original: bool | None = None) -> str:
     elif original is False:
         lines.append(f"- {t('original_failed')}")
     if data.get("seconds") is not None:
-        lines.append(f"- {t('duration', duration=_duration(data['seconds'], de))}")
+        lines.append(f"- {t('duration', duration=_duration(data['seconds']))}")
     if data.get("blank_pages") and any(data.get(k) for k in ("photos_pages", "vectorised_pages", "digital_pages",
                                                               "rotated", "deskewed", "resized_pages")):
         lines += ["", f"_{t('page_numbers')}_"]

@@ -74,6 +74,12 @@ def days() -> int:
     return _env_num("MRC_KEEP_ORIGINAL_DAYS", 30, int)
 
 
+def retry_hours() -> float:
+    """Kommt die Version so lange nicht an, wird sie einmal erneut hochgeladen (0 = nie)."""
+    from paperless_mrc.main import _env_num
+    return _env_num("MRC_KEEP_ORIGINAL_RETRY_HOURS", 6)
+
+
 def hold_dir() -> Path:
     # Standard: neben der Python-Umgebung von paperless-mrc (/opt/paperless-mrc/originals)
     return Path(os.environ.get("MRC_ORIGINALS_DIR") or Path(sys.prefix).parent / "originals")
@@ -224,6 +230,19 @@ def set_field(api: Api, doc_id: int, field_id: int, value: str | None) -> None:
 # ----------------------------------------------------------------------------- Post-Consume
 
 
+def upload_version(api: Api, task_id: str, meta: dict, doc_id: int) -> None:
+    """Abgelegte Kopie als Version „Original“ hochladen; Paperless verarbeitet sie als eigene Aufgabe."""
+    folder = hold_dir()
+    marker = folder / f"{meta['sha256']}.version"
+    marker.write_text(str(doc_id))  # vor dem Hochladen: die Version kann sofort verarbeitet werden
+    try:
+        api.request("POST", f"documents/{doc_id}/update_version/", {"version_label": VERSION_LABEL},
+                    files={"document": (meta["name"], (folder / f"{task_id}.pdf").read_bytes())})
+    except Exception:
+        marker.unlink(missing_ok=True)
+        raise
+
+
 def attach(api: Api, task_id: str, doc_id: int) -> bool:
     """Abgelegtes Original als Version anhängen und Feld setzen. False: nichts abgelegt für diesen Auftrag."""
     from paperless_mrc.main import log, t
@@ -234,14 +253,7 @@ def attach(api: Api, task_id: str, doc_id: int) -> bool:
         return False
     meta = json.loads(meta_file.read_text())
     field_id = ensure_field(api)
-    marker = folder / f"{meta['sha256']}.version"
-    marker.write_text(str(doc_id))  # vor dem Hochladen: die Version kann sofort verarbeitet werden
-    try:
-        api.request("POST", f"documents/{doc_id}/update_version/", {"version_label": VERSION_LABEL},
-                    files={"document": (meta["name"], (folder / f"{task_id}.pdf").read_bytes())})
-    except Exception:
-        marker.unlink(missing_ok=True)
-        raise
+    upload_version(api, task_id, meta, doc_id)
     # Sofort festhalten: Ein Fehler beim Setzen des Felds darf nicht zu einem zweiten Upload führen –
     # das Feld setzt dann das Aufräumen nach
     meta.update(doc_id=doc_id, uploaded=_now())
@@ -326,7 +338,7 @@ def cleanup(api: Api) -> dict:
     """Ein Durchlauf; gibt Zähler zurück (für Log und Tests)."""
     from paperless_mrc.main import log, t
 
-    counts = {"deleted": 0, "kept": 0, "waiting": 0, "released": 0, "attached": 0}
+    counts = {"deleted": 0, "kept": 0, "waiting": 0, "released": 0, "attached": 0, "retried": 0}
     folder = hold_dir()
     held = []
     if folder.is_dir():
@@ -363,7 +375,16 @@ def cleanup(api: Api) -> dict:
         if doc is not None and not any(v["checksum"] == meta["sha256"] and not v["is_root"]
                                        for v in doc.get("versions", [])):
             pending_docs.add(meta["doc_id"])
-            if _now() - meta["uploaded"] > CONFIRM_WARN_HOURS * 3600:
+            hours = retry_hours()
+            if hours and not meta.get("retried") and _now() - meta["uploaded"] > hours * 3600:
+                # Die Verarbeitung der Version ging verloren (z. B. Neustart der Dienste mitten darin). Nur einmal,
+                # damit eine doch noch ankommende erste Version höchstens eine Dublette ergibt
+                upload_version(api, task_id, meta, meta["doc_id"])
+                meta.update(retried=True, uploaded=_now())
+                meta_file.write_text(json.dumps(meta))
+                log(t("original_retried", doc=meta["doc_id"], hours=f"{hours:g}"))
+                counts["retried"] += 1
+            elif _now() - meta["uploaded"] > CONFIRM_WARN_HOURS * 3600:
                 log(t("original_not_arrived", doc=meta["doc_id"], file=folder / f"{task_id}.pdf"))
             continue
         if doc is not None:  # Feld fehlt (Setzen war gescheitert)? Dann jetzt mit dem Standard nachholen

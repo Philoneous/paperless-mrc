@@ -110,7 +110,7 @@ def test_render_einzelheiten_englisch():
     text = notes.render(data, de=False, original=False)
     assert "- Compressed: 5.0 MB → 512 KB (−90 %)" in text
     assert "- Pages: 5 → 4" in text and "- Blank pages removed: 2" in text
-    assert "- Rotated: page 3 (180°)" in text and "- Straightened: page 1 (-0.8°)" in text
+    assert "- Rotated: page 3 (180°)" in text and "- Straightened: page 1 (−0.8°)" in text
     assert "- Page size corrected to A4: 1, 3" in text
     assert "- Text layer: kept on page 1, recognised with Tesseract (deu+eng) on pages 3, 5" in text
     assert "could not be attached" in text and "- Duration: 1 min 15 s" in text

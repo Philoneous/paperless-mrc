@@ -207,6 +207,8 @@ ungültiger Wert (keine Zahl) wird durch den Standard ersetzt und im Log gemelde
 | **Texterkennung** | | | |
 | `MRC_KEEP_TEXT_LAYER` | `true` | | Vorhandene Textebene übernehmen; `false` = immer neu erkennen (Seiten werden dann auch gedreht und begradigt) |
 | `MRC_ROTATE_CHECK` | `true` | | Ist die Lageerkennung unsicher, schlägt aber eine Drehung vor, wird der Text in beiden Lagen erkannt und nur gedreht, wenn das deutlich mehr Wörter ergibt – hilft bei quer beschriebenen, hochkant gescannten Formularen |
+| `MRC_ROTATE_CHECK_MIN_WORDS` | `5` | 1–100 | Drehungsprüfung: So viele sicher erkannte Wörter muss die gedrehte Lage mindestens ergeben. Kleiner = auch kopfstehende Seiten mit wenig Text werden gedreht; größer = nur Seiten mit viel Text |
+| `MRC_ROTATE_CHECK_FACTOR` | `1.5` | 1–5 | Drehungsprüfung: So viel mal mehr Wörter muss die gedrehte Lage ergeben als die bisherige. Kleiner = dreht bereitwilliger; größer = nur, wenn es deutlich besser ist |
 | `MRC_DESKEW_MIN_ANGLE` | `0.2` | 0–2 | Kleinere Schräglagen (Grad) bleiben, wie sie sind. 0 = jede erkannte Schräglage korrigieren |
 | `MRC_DESKEW_MAX_ANGLE` | `5` | 0,5–45 | Suchbereich ± in Grad. Größer = auch stark schiefe Seiten, aber langsamer. Ein Ergebnis am Rand des Bereichs gilt als unklar und wird nicht korrigiert |
 | `MRC_DESKEW_MIN_CONFIDENCE` | `1.3` | 1–3 | Nur begradigen, wenn der beste Winkel deutlich heraussticht. 1 = immer (Logos oder Stempel auf textarmen Seiten können eine gerade Seite kippen); 3 = nur Seiten mit vielen klaren Textzeilen |
@@ -226,6 +228,7 @@ ungültiger Wert (keine Zahl) wird durch den Standard ersetzt und im Log gemelde
 | **Original aufbewahren (optional)** | | | |
 | `MRC_KEEP_ORIGINAL` | `false` | | Original bis zur Prüfung als Version aufbewahren (siehe oben) |
 | `MRC_KEEP_ORIGINAL_DAYS` | `30` | 1–3650 | Standardfrist, nach der das Original gelöscht wird |
+| `MRC_KEEP_ORIGINAL_RETRY_HOURS` | `6` | 0–720 | Ist die Version „Original“ nach dieser Zeit nicht in Paperless angekommen (z. B. Neustart von Paperless während der Verarbeitung), wird sie einmal erneut hochgeladen. 0 = nie, nur nach 24 Stunden warnen |
 | `MRC_API_TOKEN` | – | | API-Token von Paperless (aus *Mein Profil*), nötig für die Notiz sowie zum Anhängen und Löschen von Versionen |
 | `MRC_API_URL` | `http://localhost:8000` | | Adresse der Paperless-API aus dem Container (Port aus `PAPERLESS_PORT`) |
 | `MRC_ORIGINALS_DIR` | `/opt/paperless-mrc/originals` | | Hier warten Originale, bis sie angehängt sind |

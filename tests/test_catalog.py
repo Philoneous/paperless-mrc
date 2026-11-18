@@ -55,7 +55,8 @@ def test_standardwerte_wie_im_code(monkeypatch):
               "MRC_BLANK_PAPER_PERCENT": s.blank_paper_percent, "PAPERLESS_OCR_DESKEW": s.deskew,
               "PAPERLESS_OCR_ROTATE_PAGES": s.rotate, "PAPERLESS_OCR_ROTATE_PAGES_THRESHOLD": s.rotate_threshold,
               "MRC_POPPLER_CHECK": s.poppler_check, "MRC_TIMING": s.timing, "PAPERLESS_OCR_LANGUAGE": s.language,
-              "MRC_NOTE": s.note, "MRC_NOTE_UNCHANGED": s.note_unchanged}
+              "MRC_NOTE": s.note, "MRC_NOTE_UNCHANGED": s.note_unchanged,
+              "MRC_ROTATE_CHECK_MIN_WORDS": s.rotate_min_words, "MRC_ROTATE_CHECK_FACTOR": s.rotate_factor}
     for key, value in fields.items():
         option = catalog.BY_KEY[key]
         if option.kind == "bool":
@@ -66,6 +67,7 @@ def test_standardwerte_wie_im_code(monkeypatch):
             assert option.default == value, key
     from paperless_mrc import originals
     assert int(catalog.BY_KEY["MRC_KEEP_ORIGINAL_DAYS"].default) == originals.days()
+    assert float(catalog.BY_KEY["MRC_KEEP_ORIGINAL_RETRY_HOURS"].default) == originals.retry_hours()
 
 
 @pytest.mark.parametrize("option", [o for o in catalog.OPTIONS if o.kind in ("int", "float")], ids=lambda o: o.key)

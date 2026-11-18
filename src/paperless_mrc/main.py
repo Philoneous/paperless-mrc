@@ -126,10 +126,14 @@ MESSAGES = {
     "original_unknown_value": ("document #{doc}: unknown value {value!r} in “Original (MRC)” – nothing deleted",
                                "Dokument #{doc}: unbekannter Wert {value!r} in „Original (MRC)“ – nichts gelöscht"),
     "original_deleted": ("document #{doc}: original version deleted", "Dokument #{doc}: Version „Original“ gelöscht"),
+    "original_retried": ("document #{doc}: the original version did not arrive within {hours} h (e.g. Paperless was "
+                         "restarted) – uploaded once more",
+                         "Dokument #{doc}: Die Version „Original“ kam nicht innerhalb von {hours} h an (z. B. Neustart "
+                         "von Paperless) – erneut hochgeladen"),
     "cleanup_done": ("cleanup: {deleted} original(s) deleted, {kept} kept, {waiting} waiting, {attached} attached "
-                     "later, {released} held cop(y/ies) released",
+                     "later, {retried} uploaded again, {released} held cop(y/ies) released",
                      "Aufräumen: {deleted} Original(e) gelöscht, {kept} behalten, {waiting} wartend, {attached} "
-                     "nachträglich angehängt, {released} abgelegte Kopie(n) freigegeben"),
+                     "nachträglich angehängt, {retried} erneut hochgeladen, {released} abgelegte Kopie(n) freigegeben"),
     "cleanup_failed": ("cleanup failed: {error}", "Aufräumen fehlgeschlagen: {error}"),
     "invalid_setting": ("{name}={value!r} is not a number – using the default {default}",
                         "{name}={value!r} ist keine Zahl – Standard {default} wird verwendet"),
@@ -188,6 +192,9 @@ RANGES: dict[str, tuple[float, float]] = {
     "MRC_SHARPEN_RADIUS": (0.5, 5),
     "MRC_MASK_FACTOR": (0.1, 1),
     "MRC_KEEP_ORIGINAL_DAYS": (1, 3650),
+    "MRC_KEEP_ORIGINAL_RETRY_HOURS": (0, 720),
+    "MRC_ROTATE_CHECK_MIN_WORDS": (1, 100),
+    "MRC_ROTATE_CHECK_FACTOR": (1, 5),
 }
 
 
@@ -224,6 +231,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in ("true", "1", "t", "y", "yes")
 
 
+# Unsichere Drehung: gedrehte Lage gewinnt nur mit deutlich mehr sicher erkannten Wörtern. Gemessen an einem hochkant
+# gescannten Querformat-Formular (kleine Schrift, Tabellen, Wasserzeichen; OSD-Sicherheit 1,6 bzw. 4,1):
+# 82 → 432 und 89 → 420 sichere Wörter. Seiten mit wenig Text (Grußformel, Summenzeilen, Anlagenvermerk; 11/2026,
+# synthetisch, je aufrecht und kopfstehend): richtige Lage 4–9, falsche 0–4 Wörter, Verhältnis ≥ 1,33; echte
+# kopfstehende Schlussseite 7 zu 1. Mindestens 5 Wörter: dreht solche Seiten, reine Zahlenzeilen (teils
+# drehsymmetrisch, 4 zu 2–3) bleiben. Früher 10 – kopfstehende Seiten mit wenig Text blieben stehen.
+ROTATE_CHECK_FACTOR = 1.5  # MRC_ROTATE_CHECK_FACTOR
+ROTATE_CHECK_MIN_WORDS = 5  # MRC_ROTATE_CHECK_MIN_WORDS
+
+
 @dataclass(frozen=True)
 class Settings:
     """Übernimmt die passenden OCR-Einstellungen von Paperless (gleiche Standardwerte)."""
@@ -254,6 +271,8 @@ class Settings:
     mixed_pdfs: bool = True  # PDFs mit nicht gescannten Seiten bearbeiten (diese Seiten bleiben unverändert)
     keep_text_layer: bool = True  # vorhandene Textebene übernehmen statt neu erkennen
     rotate_check: bool = True  # unsichere Drehung per Texterkennung in beiden Lagen entscheiden
+    rotate_min_words: int = ROTATE_CHECK_MIN_WORDS  # … gedrehte Lage braucht mindestens so viele sichere Wörter
+    rotate_factor: float = ROTATE_CHECK_FACTOR  # … und so viel mal mehr als die ungedrehte
     sharpen: int = 150  # Nachschärfen vor der Kodierung in % (Unscharfmaskierung); 0 = aus
     sharpen_radius: float = 1.5  # Radius in Pixeln bei 200 dpi (skaliert mit der Auflösung)
     mask_sensitivity: float = 0.5  # Faktor auf die Schwellen der Textmaske; kleiner = mehr Schrift scharf, 1 = recode_pdf-Standard
@@ -295,6 +314,8 @@ class Settings:
             mixed_pdfs=_env_bool("MRC_MIXED_PDFS", True),
             keep_text_layer=_env_bool("MRC_KEEP_TEXT_LAYER", True),
             rotate_check=_env_bool("MRC_ROTATE_CHECK", True),
+            rotate_min_words=_env_num("MRC_ROTATE_CHECK_MIN_WORDS", ROTATE_CHECK_MIN_WORDS, int),
+            rotate_factor=_env_num("MRC_ROTATE_CHECK_FACTOR", ROTATE_CHECK_FACTOR),
             max_dpi=_env_num("MRC_MAX_DPI", 0, int),
             sharpen=_env_num("MRC_SHARPEN", 150, int),
             mask_sensitivity=_env_num("MRC_MASK_FACTOR", 0.5),
@@ -458,15 +479,11 @@ def orientation(image_path: Path) -> tuple[int, float]:
     return int(values.get("Rotate", "0").strip()), float(values.get("Orientation confidence", "0").strip())
 
 
-# Unsichere Drehung: gedrehte Lage gewinnt nur mit deutlich mehr sicher erkannten Wörtern. Gemessen an einem hochkant
-# gescannten Querformat-Formular (kleine Schrift, Tabellen, Wasserzeichen; OSD-Sicherheit 1,6 bzw. 4,1):
-# 82 → 432 und 89 → 420 sichere Wörter.
-ROTATE_CHECK_FACTOR = 1.5
-ROTATE_CHECK_MIN_WORDS = 10
 
 
 def decide_rotation(rotate: int, confidence: float, threshold: float, check: bool,
-                    count: Callable[[int], int]) -> tuple[int, int | None, int | None]:
+                    count: Callable[[int], int], min_words: int = ROTATE_CHECK_MIN_WORDS,
+                    factor: float = ROTATE_CHECK_FACTOR) -> tuple[int, int | None, int | None]:
     """Drehung für eine Seite: OSD bei ausreichender Sicherheit; sonst (falls check) entscheidet die Texterkennung
     in beiden Lagen – count(Grad) liefert die sicher erkannten Wörter. Rückgabe: (Drehung, Wörter ungedreht,
     Wörter gedreht); die Wortzahlen nur, wenn verglichen wurde."""
@@ -477,7 +494,7 @@ def decide_rotation(rotate: int, confidence: float, threshold: float, check: boo
     if not check:
         return 0, None, None
     kept, turned = count(0), count(rotate)
-    better = turned >= max(ROTATE_CHECK_MIN_WORDS, ROTATE_CHECK_FACTOR * kept)
+    better = turned >= max(min_words, factor * kept)
     return (rotate if better else 0), kept, turned
 
 
@@ -559,7 +576,8 @@ def encode_page(page_pdf: Path, work: Path, settings: Settings, label: str = "Pa
                 return confident_words(run("tesseract", candidate, "-", "-l", settings.language, "hocr").stdout)
 
             rotate, kept, turned = decide_rotation(suggested, confidence, settings.rotate_threshold,
-                                                   settings.rotate_check, count)
+                                                   settings.rotate_check, count, settings.rotate_min_words,
+                                                   settings.rotate_factor)
             if kept is not None:
                 log(t("rotate_checked", label=label, confidence=confidence, kept=kept, turned=turned,
                       degrees=suggested))

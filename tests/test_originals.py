@@ -73,7 +73,7 @@ def test_original_wird_angehaengt_geprueft_und_auf_wunsch_geloescht(tmp_path, rn
 
     # Erster Durchlauf: abgelegte Kopie freigeben (Version ist angekommen), Original bleibt innerhalb der Frist
     counts = originals.cleanup(originals.Api.from_env())
-    assert counts == {"deleted": 0, "kept": 0, "waiting": 1, "released": 1, "attached": 0}
+    assert counts == {"deleted": 0, "kept": 0, "waiting": 1, "released": 1, "attached": 0, "retried": 0}
     assert list(hold.iterdir()) == []
 
     # „Jetzt löschen“ → Version weg, Feld entfernt, komprimierte Fassung (Root) bleibt
@@ -259,3 +259,40 @@ def test_geloeschtes_dokument_kopie_bleibt_innerhalb_der_frist(tmp_path, rng, en
     meta["uploaded"] -= 31 * 86400
     (hold / "task-1.json").write_text(json.dumps(meta))
     assert originals.cleanup(originals.Api.from_env())["released"] == 1
+
+
+def test_verlorene_version_wird_einmal_erneut_hochgeladen(tmp_path, rng, env, monkeypatch, capsys):
+    # Neustart von Paperless, während die Version „Original“ verarbeitet wird: die Aufgabe geht verloren
+    hold, server = env
+    consume(tmp_path, rng, server)
+    monkeypatch.setenv("DOCUMENT_ID", "7")
+    originals.post_consume()
+    doc = server.docs[7]
+    lost = [v for v in doc["versions"] if not v["is_root"]]
+    doc["versions"] = [v for v in doc["versions"] if v["is_root"]]
+    api = originals.Api.from_env()
+
+    assert originals.cleanup(api)["retried"] == 0  # noch innerhalb der Frist: warten
+    later = originals._now() + 7 * 3600
+    monkeypatch.setattr(originals, "_now", lambda: later)
+    assert originals.cleanup(api)["retried"] == 1
+    again = [v for v in doc["versions"] if not v["is_root"]]
+    assert len(again) == 1 and again[0]["checksum"] == lost[0]["checksum"]  # unverändertes Original
+    assert "uploaded once more" in capsys.readouterr().out
+
+    doc["versions"] = [v for v in doc["versions"] if v["is_root"]]  # geht wieder verloren
+    monkeypatch.setattr(originals, "_now", lambda: later + 7 * 3600)
+    counts = originals.cleanup(api)
+    assert counts["retried"] == 0 and (hold / "task-1.pdf").exists()  # nur einmal; Kopie bleibt
+
+
+def test_erneutes_hochladen_abschaltbar(tmp_path, rng, env, monkeypatch):
+    _, server = env
+    consume(tmp_path, rng, server)
+    monkeypatch.setenv("DOCUMENT_ID", "7")
+    originals.post_consume()
+    server.docs[7]["versions"] = [v for v in server.docs[7]["versions"] if v["is_root"]]
+    monkeypatch.setenv("MRC_KEEP_ORIGINAL_RETRY_HOURS", "0")
+    later = originals._now() + 30 * 3600
+    monkeypatch.setattr(originals, "_now", lambda: later)
+    assert originals.cleanup(originals.Api.from_env())["retried"] == 0
