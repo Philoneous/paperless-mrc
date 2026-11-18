@@ -93,6 +93,8 @@ setup_args=(--conf "$CONF" --state "$INSTALL_DIR/setup.json" --lang "$([[ $DE ==
 interactive || setup_args+=(--yes)
 "$INSTALL_DIR/venv/bin/paperless-mrc-setup" "${setup_args[@]}" \
   || die "$(say "Setup aborted – paperless.conf unchanged." "Einrichtung abgebrochen – paperless.conf unverändert.")"
+language="$(conf_value MRC_LANGUAGE)"  # im Assistenten evtl. geändert (Standard en = keine Zeile)
+[[ "${language,,}" == de* ]] && DE=1 || DE=0
 echo
 
 # ---- OCR language packs (languages chosen above) --------------------------------------------

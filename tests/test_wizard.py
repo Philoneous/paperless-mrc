@@ -127,7 +127,7 @@ def test_update_fragt_nur_neue_optionen(tmp_path, monkeypatch):
 
 def test_bestehend_alles_durchgehen_und_auf_standard_zuruecksetzen(tmp_path):
     existing = "PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\nPAPERLESS_OCR_LANGUAGE=deu\nMRC_SKIP_PHOTOS=false\n"
-    answers = ["n"] + basic_answers(MRC_SKIP_PHOTOS="y") + ["n"]
+    answers = ["n", ""] + basic_answers(MRC_SKIP_PHOTOS="y") + ["n"]  # "": Sprache bleibt
     conf, _, _ = run(tmp_path, answers, conf_text=existing)
     assert "MRC_SKIP_PHOTOS" not in conf  # Standard → Zeile entfernt
     assert conf["PAPERLESS_OCR_LANGUAGE"] == "deu"  # Enter übernimmt den bisherigen Wert
@@ -160,3 +160,16 @@ def test_conf_zeilen_werden_ersetzt_und_kommentare_bleiben(tmp_path):
     text = path.read_text()
     assert "MRC_SHARPEN=200" in text and "#MRC_SHARPEN=50" in text and "PAPERLESS_X" not in text
     assert text.index("# paperless-mrc") < text.index("MRC_NEU=a")
+
+
+def test_alles_neu_fragt_auch_die_sprache(tmp_path):
+    existing = "PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\nMRC_LANGUAGE=de\n"
+    conf, out, _ = run(tmp_path, ["n", "en"] + basic_answers() + ["n"], conf_text=existing, lang="de")
+    assert "Sprache / Language" in out and "MRC_LANGUAGE" not in conf  # en = Standard → Zeile entfernt
+    assert "OCR languages" in out  # ab der Sprachfrage auf Englisch weiter
+
+
+def test_nur_neue_optionen_fragt_die_sprache_nicht(tmp_path):
+    existing = "PAPERLESS_PRE_CONSUME_SCRIPT=/opt/x\nMRC_LANGUAGE=de\n"
+    conf, out, _ = run(tmp_path, ["j"], conf_text=existing, state={"revision": catalog.REVISION}, lang="de")
+    assert "Sprache / Language" not in out and conf["MRC_LANGUAGE"] == "de"

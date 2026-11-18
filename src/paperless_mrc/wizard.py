@@ -315,6 +315,10 @@ class Wizard:
                         self.ask_option(option)
                         self.follow_ups(option, questions, only_missing=True)
             else:
+                if existing:  # alles neu durchgehen: auch die Sprache (bei Neuinstallation fragt schon install.sh)
+                    language = catalog.BY_KEY["MRC_LANGUAGE"]
+                    self.ask_option(language)
+                    self.p.de = self.answers.get(language.key, self.current(language)).lower().startswith("de")
                 basic = [o for o in questions if o.level == "basic" and not o.requires]
                 for number, option in enumerate(basic, 1):
                     self.ask_option(option, f"({number}/{len(basic)}) ")

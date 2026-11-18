@@ -251,9 +251,9 @@ OPTIONS: list[Option] = [
            title=("Log the time of each step", "Dauer jedes Schritts ins Log schreiben"),
            help=("For analysis only.", "Nur zur Analyse.")),
     Option("MRC_LANGUAGE", "advanced", "choice", "en", group=OTHER, choices=("en", "de"),
-           title=("Language of messages", "Sprache der Meldungen"),
-           help=("Log messages, installer and the labels of the field “Original (MRC)”.",
-                 "Log-Meldungen, Installer und Beschriftung des Felds „Original (MRC)“.")),
+           title=("Language / Sprache", "Sprache / Language"),
+           help=("Installer, log messages, the note on the document and the labels of the field “Original (MRC)”.",
+                 "Installer, Log-Meldungen, Notiz am Dokument und Beschriftung des Felds „Original (MRC)“.")),
 ]
 
 BY_KEY = {o.key: o for o in OPTIONS}
